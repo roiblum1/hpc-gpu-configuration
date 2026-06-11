@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+.tmp/
+
+# Local environment and secrets
+.env
+.env.*
+*.local
+*.key
+*.pem
+kubeconfig
+kubeconfig.*
+
+# Helm artifacts
+*.tgz
+Chart.lock
+charts/**/charts/
+charts/**/tmpcharts/
+
