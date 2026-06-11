@@ -1,0 +1,11 @@
+# cert-manager via OLM. In a disconnected cluster, `source` must point at your
+# mirrored catalog (oc-mirror), not the public redhat-operators catalog.
+namespace: cert-manager-operator
+operatorGroup:
+  enabled: true
+subscription:
+  name: openshift-cert-manager-operator
+  channel: stable-v1
+  source: redhat-operators          # -> your mirrored CatalogSource name
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

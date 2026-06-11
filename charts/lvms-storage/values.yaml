@@ -1,0 +1,45 @@
+# Phase 4 — LVMS NVMe tiers. Source: §4 / §10.
+# Two jobs: kvcache (KVBM disk tier, must be xfs for fallocate) and models (staged weights).
+
+roleLabel: gpu-hpc
+
+operator:
+  enabled: true
+  namespace: openshift-storage
+  operatorGroup: true
+  subscription:
+    name: lvms-operator
+    channel: stable
+    source: redhat-operators        # -> your mirrored CatalogSource
+    sourceNamespace: openshift-marketplace
+    installPlanApproval: Automatic
+
+lvmCluster:
+  name: gpu-nvme
+  deviceClasses:
+    - name: kvcache
+      default: true
+      fstype: xfs                    # REQUIRED — KVBM disk tier uses fallocate(). §10
+      # Pin by-path, ideally drives on BOTH sockets so socket-1 decode writes don't cross UPI. §4 NUMA note
+      paths:
+        - /dev/disk/by-path/pci-0000:.._nvme-1
+        - /dev/disk/by-path/pci-0000:.._nvme-2
+      thinPool:
+        name: kv-thin
+        sizePercent: 90
+        # LVMS only produces thin pools. ratio=1 removes overcommit risk (not thin metadata cost).
+        # If fio/gdsio at Gate 4 shows thin overhead hurts, fall back to striped thick LVs via
+        # MachineConfig + Local Storage Operator (§4 escape hatch).
+        overprovisionRatio: 1
+    # Optional 2nd class for staged weights, if you want LVMS to manage the models LV too.
+    # The model-staging chart defaults to a hostPath instead; enable this only if you prefer a PVC.
+    - name: models
+      default: false
+      enabled: false
+      fstype: xfs
+      paths:
+        - /dev/disk/by-path/pci-0000:.._nvme-3
+      thinPool:
+        name: models-thin
+        sizePercent: 95
+        overprovisionRatio: 1

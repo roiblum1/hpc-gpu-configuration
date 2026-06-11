@@ -1,0 +1,40 @@
+# Phase 5 — KAI Scheduler. Source: §5 / §10.
+# Invariants: every GPU pod names kai-scheduler + carries a queue label; NOTHING else
+# manages GPU quota on this cluster (no Kueue/Run:ai quota). One brain.
+
+# Upstream KAI engine. Off by default — disconnected clusters mirror the chart first.
+# To enable: mirror to your registry (or `helm pull`/git clone into ./charts/), set true,
+# then `helm dependency build` in this directory. Enable network-topology/bin-packing
+# placement in these values so EP groups land on fabric-adjacent nodes (same leaf/rail group).
+upstream:
+  install: false
+# kai-scheduler:                 # <- upstream chart values pass through here when install=true
+#   placement:
+#     binPacking: true
+#     networkTopologyAware: true
+
+# Queue hierarchy (scheduling.run.ai/v2). Quotas in GPU counts; quota=-1 means unbounded.
+# Keep quotas in multiples of the EP group size (= multinode.nodeCount x 8) so gangs fit cleanly.
+queues:
+  root:
+    name: org
+  interactive:
+    name: serving-interactive
+    priority: 100
+    gpu: {quota: 64, limit: 96, overQuotaWeight: 3}   # guaranteed floor = SLO capacity
+  batch:
+    name: serving-batch
+    priority: 50
+    gpu: {quota: 0, limit: -1, overQuotaWeight: 1}     # scavenger: soaks idle GPUs, fully reclaimable
+  aux:
+    name: aux-cpu
+    priority: 10
+    gpu: {quota: 0, limit: 0}                           # CPU/RAM-only: embedders, rerankers, eval
+
+priorityClasses:
+  interactive:
+    name: serving-critical
+    value: 1000000
+  batch:
+    name: serving-batch
+    value: 100000

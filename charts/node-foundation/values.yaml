@@ -1,0 +1,54 @@
+# Phase 1 — Node foundation (kernel tuning). Source: glm51-openshift-deployment.md §1, §10.
+# Run one release per CPU SKU if core counts differ (H200/Intel vs Blackwell/EPYC);
+# the cpusets below are the §1.2 example for a 2x56-core node.
+
+pool:
+  name: gpu-hpc          # MachineConfigPool name + MCP selector label
+  roleLabel: gpu-hpc     # node-role.kubernetes.io/<roleLabel>=""  — §10 invariant
+
+performanceProfile:
+  enabled: true
+  name: gpu-hpc
+  cpu:
+    # 8 cores/socket reserved on BOTH sockets (per-NUMA memory + NIC IRQ steering). §10
+    reserved: "0-7,56-63"
+    isolated: "8-55,64-111"
+  numa:
+    # best-effort, NOT single-numa-node: pods are full-node (8 GPU + 8 VF) and span
+    # both sockets; single-numa-node would reject them at admission. §1.2 decision.
+    topologyPolicy: best-effort
+  hugepages:
+    # Small on purpose. KVBM host tier uses CUDA pinned (page-locked) memory, NOT
+    # hugetlbfs; large reservations steal RAM from the tier being built. §1.2 / §10.
+    defaultSize: "1G"
+    pages:
+      - size: "1G"
+        count: 16
+  additionalKernelArgs:
+    - "iommu=pt"              # passthrough — full IOMMU translation taxes GPUDirect RDMA
+    - "intel_iommu=on"        # use amd_iommu=on for EPYC Blackwell chassis
+    - "numa_balancing=disable"
+    - "skew_tick=1"
+    - "tsc=reliable"
+    - "nowatchdog"
+  # keep managed_irq so device IRQs land on reserved CPUs
+  globallyDisableIrqLoadBalancing: false
+
+tuned:
+  enabled: true
+  name: gpu-hpc-extras
+  priority: 19
+  # NTO names its generated profile openshift-node-performance-<performanceProfile.name>
+  baseProfile: openshift-node-performance-gpu-hpc
+
+# CRI-O memlock unlimited — ibverbs registration inside RDMA containers needs it. §1.3 / §10
+crioMemlock:
+  enabled: true
+
+# RoCE host-side QoS (systemd oneshot, after network-online). Must mirror the switch fabric. §1.4 / §10
+roceQos:
+  enabled: true
+  trafficClass: 106    # DSCP 26 + ECN  -> tc/1/traffic_class and cma_roce_tos
+  cnpDscp: 48          # CNP priority 6 (switch side mirrors this)
+  pfcPriority: 3       # lossless priority
+  mtu: 9000

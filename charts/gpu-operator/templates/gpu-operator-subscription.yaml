@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.gpuOperator.namespace }}
+{{- if .Values.gpuOperator.operatorGroup }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: nvidia-gpu-operator-group
+  namespace: {{ .Values.gpuOperator.namespace }}
+spec:
+  targetNamespaces:
+    - {{ .Values.gpuOperator.namespace }}
+{{- end }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ .Values.gpuOperator.subscription.name }}
+  namespace: {{ .Values.gpuOperator.namespace }}
+spec:
+  channel: {{ .Values.gpuOperator.subscription.channel }}
+  name: {{ .Values.gpuOperator.subscription.name }}
+  source: {{ .Values.gpuOperator.subscription.source }}
+  sourceNamespace: {{ .Values.gpuOperator.subscription.sourceNamespace }}
+  installPlanApproval: {{ .Values.gpuOperator.subscription.installPlanApproval }}

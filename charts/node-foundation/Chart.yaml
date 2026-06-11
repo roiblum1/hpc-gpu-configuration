@@ -1,0 +1,10 @@
+apiVersion: v2
+name: node-foundation
+description: >-
+  Phase 1 kernel tuning for GPU-HPC nodes — MachineConfigPool, PerformanceProfile
+  (CPU/NUMA/IRQ/hugepages), child Tuned profile (sysctls + RDMA), CRI-O memlock
+  drop-in, and the RoCE host-side QoS systemd unit. One subject: node foundation.
+type: application
+version: 0.1.0
+appVersion: "4.20"
+keywords: [openshift, performance-profile, tuned, machineconfig, roce, rdma]

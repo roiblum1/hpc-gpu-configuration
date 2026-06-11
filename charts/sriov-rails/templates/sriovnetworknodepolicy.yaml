@@ -1,0 +1,20 @@
+{{- range $r := .Values.rails }}
+---
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovNetworkNodePolicy
+metadata:
+  name: {{ $r.name }}
+  namespace: {{ $.Values.operator.namespace }}
+spec:
+  resourceName: {{ $r.name }}             # -> openshift.io/{{ $r.name }}
+  nodeSelector:
+    node-role.kubernetes.io/{{ $.Values.roleLabel }}: ""
+  priority: 90
+  numVfs: {{ $.Values.numVfs }}
+  nicSelector:
+    pfNames: ["{{ $r.pf }}"]              # rail {{ $r.name }} on socket {{ $r.socket }}
+  deviceType: netdevice                   # NOT vfio — kernel netdev + RDMA
+  isRdma: true
+  linkType: eth
+  mtu: {{ $.Values.mtu }}
+{{- end }}

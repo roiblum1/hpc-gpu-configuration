@@ -1,0 +1,14 @@
+{{- range $r := .Values.rails }}
+---
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovNetwork
+metadata:
+  name: {{ $r.name }}
+  namespace: {{ $.Values.operator.namespace }}
+spec:
+  resourceName: {{ $r.name }}
+  networkNamespace: {{ $.Values.servingNamespace }}
+  ipam: |
+    {"type": "whereabouts", "range": "{{ $r.subnet }}"}
+  metaPlugins: ""
+{{- end }}

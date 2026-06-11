@@ -1,0 +1,35 @@
+{{- if .Values.performanceProfile.enabled }}
+apiVersion: performance.openshift.io/v2
+kind: PerformanceProfile
+metadata:
+  name: {{ .Values.performanceProfile.name }}
+spec:
+  cpu:
+    reserved: "{{ .Values.performanceProfile.cpu.reserved }}"
+    isolated: "{{ .Values.performanceProfile.cpu.isolated }}"
+  numa:
+    topologyPolicy: "{{ .Values.performanceProfile.numa.topologyPolicy }}"
+  # MemoryManager Static is set by NTO when numa policy + reserved are set
+  memory: {}
+  hugepages:
+    defaultHugepagesSize: "{{ .Values.performanceProfile.hugepages.defaultSize }}"
+    pages:
+      {{- range .Values.performanceProfile.hugepages.pages }}
+      - size: "{{ .size }}"
+        count: {{ .count }}
+      {{- end }}
+  # NTO derives kubelet config: cpuManagerPolicy static (full-pcpus-only),
+  # memoryManagerPolicy Static, topologyManager per .numa
+  kubeletConfig: {}
+  net:
+    userLevelNetworking: false
+  additionalKernelArgs:
+    {{- range .Values.performanceProfile.additionalKernelArgs }}
+    - "{{ . }}"
+    {{- end }}
+  globallyDisableIrqLoadBalancing: {{ .Values.performanceProfile.globallyDisableIrqLoadBalancing }}
+  nodeSelector:
+    node-role.kubernetes.io/{{ .Values.pool.roleLabel }}: ""
+  machineConfigPoolSelector:
+    pools.operator.machineconfiguration.openshift.io/{{ .Values.pool.name }}: ""
+{{- end }}

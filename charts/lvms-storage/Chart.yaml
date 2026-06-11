@@ -1,0 +1,10 @@
+apiVersion: v2
+name: lvms-storage
+description: >-
+  Phase 4 — LVM Storage (LVMS) operator + LVMCluster for the NVMe tiers: a kvcache
+  device class (KVBM G3 cold/parked KV, xfs for fallocate) and a models device class
+  (staged weights). Honest about thin-pool reality — see values comments.
+type: application
+version: 0.1.0
+appVersion: "4.20"
+keywords: [openshift, lvms, topolvm, nvme, kvbm, storage]

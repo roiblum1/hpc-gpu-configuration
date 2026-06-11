@@ -1,0 +1,31 @@
+apiVersion: nvidia.com/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Values.clusterPolicy.name }}
+spec:
+  driver:
+    enabled: true
+    useOpenKernelModules: {{ .Values.clusterPolicy.driver.useOpenKernelModules }}
+    usePrecompiled: {{ .Values.clusterPolicy.driver.usePrecompiled }}
+    repository: {{ .Values.clusterPolicy.driver.repository }}
+  gds:
+    enabled: {{ .Values.clusterPolicy.gds }}
+  gdrcopy:
+    enabled: {{ .Values.clusterPolicy.gdrcopy }}
+  toolkit:
+    enabled: true
+  devicePlugin:
+    enabled: true
+    config: {}
+  mig:
+    strategy: {{ .Values.clusterPolicy.migStrategy }}
+  dcgmExporter:
+    enabled: {{ .Values.clusterPolicy.dcgmExporter }}
+    serviceMonitor:
+      enabled: {{ .Values.clusterPolicy.dcgmExporter }}
+  daemonsets:
+    tolerations:
+      - key: node-role.kubernetes.io/{{ .Values.roleLabel }}
+        operator: Exists
+  nodeSelector:
+    node-role.kubernetes.io/{{ .Values.roleLabel }}: ""

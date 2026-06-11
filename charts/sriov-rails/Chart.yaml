@@ -1,0 +1,10 @@
+apiVersion: v2
+name: sriov-rails
+description: >-
+  Phase 3 — RoCE rail exposure as NUMA-scoped SR-IOV pools (the DRA stand-in until
+  OCP 4.21+). SR-IOV Network Operator (OLM) plus one SriovNetworkNodePolicy and one
+  SriovNetwork (NAD) per rail. Pool names are chosen to map 1:1 onto future DRA claims.
+type: application
+version: 0.1.0
+appVersion: "4.20"
+keywords: [openshift, sriov, roce, rdma, rail]

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: gpu-operator
+description: >-
+  Phase 2 — Node Feature Discovery + NVIDIA GPU Operator (both via OLM) and the
+  ClusterPolicy tuned for this design: open kernel modules + DMA-BUF GDR, GDS,
+  gdrcopy, whole-GPU device plugin (no MIG/time-slicing), DCGM exporter.
+type: application
+version: 0.1.0
+appVersion: "4.20"
+keywords: [openshift, nvidia, gpu-operator, nfd, gpudirect, dcgm]

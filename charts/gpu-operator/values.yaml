@@ -1,0 +1,39 @@
+# Phase 2 — NFD + NVIDIA GPU Operator. Source: §2 / §10.
+# NFD must reconcile before the GPU Operator (it labels nodes the operator selects on).
+
+roleLabel: gpu-hpc     # node-role.kubernetes.io/<roleLabel> — must match node-foundation. §10
+
+nfd:
+  enabled: true
+  namespace: openshift-nfd
+  operatorGroup: true
+  subscription:
+    name: nfd
+    channel: stable
+    source: redhat-operators        # -> your mirrored CatalogSource
+    sourceNamespace: openshift-marketplace
+    installPlanApproval: Automatic
+  instance:
+    enabled: true                   # "default instance is fine" (§2)
+
+gpuOperator:
+  namespace: nvidia-gpu-operator
+  operatorGroup: true
+  subscription:
+    name: gpu-operator-certified
+    channel: stable
+    source: certified-operators     # -> your mirrored CatalogSource
+    sourceNamespace: openshift-marketplace
+    installPlanApproval: Automatic
+
+clusterPolicy:
+  name: gpu-cluster-policy
+  driver:
+    useOpenKernelModules: true      # REQUIRED for DMA-BUF GPUDirect RDMA. §2 load-bearing line
+    usePrecompiled: true            # disconnected: precompiled/signed driver images
+    repository: <your-registry>/nvidia
+  gds: true                         # nvidia-fs -> GPUDirect Storage (NVMe->HBM), Phase 4/6
+  gdrcopy: true                     # low-latency small-message D2H/H2D — helps NIXL/KVBM
+  # no time-slicing, no MIG — whole physical GPUs only
+  migStrategy: none
+  dcgmExporter: true

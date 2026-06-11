@@ -1,0 +1,45 @@
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata:
+  name: {{ .Values.queues.root.name }}
+spec:
+  resources:
+    gpu: {quota: -1, limit: -1, overQuotaWeight: 1}
+---
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata:
+  name: {{ .Values.queues.interactive.name }}
+spec:
+  parentQueue: {{ .Values.queues.root.name }}
+  priority: {{ .Values.queues.interactive.priority }}
+  resources:
+    gpu:
+      quota: {{ .Values.queues.interactive.gpu.quota }}
+      limit: {{ .Values.queues.interactive.gpu.limit }}
+      overQuotaWeight: {{ .Values.queues.interactive.gpu.overQuotaWeight }}
+---
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata:
+  name: {{ .Values.queues.batch.name }}
+spec:
+  parentQueue: {{ .Values.queues.root.name }}
+  priority: {{ .Values.queues.batch.priority }}
+  resources:
+    gpu:
+      quota: {{ .Values.queues.batch.gpu.quota }}
+      limit: {{ .Values.queues.batch.gpu.limit }}
+      overQuotaWeight: {{ .Values.queues.batch.gpu.overQuotaWeight }}
+---
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata:
+  name: {{ .Values.queues.aux.name }}
+spec:
+  parentQueue: {{ .Values.queues.root.name }}
+  priority: {{ .Values.queues.aux.priority }}
+  resources:
+    gpu:
+      quota: {{ .Values.queues.aux.gpu.quota }}
+      limit: {{ .Values.queues.aux.gpu.limit }}

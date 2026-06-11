@@ -1,0 +1,25 @@
+{{- if .Values.roceQos.enabled }}
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-{{ .Values.pool.roleLabel }}-roce-qos
+  labels:
+    machineconfiguration.openshift.io/role: {{ .Values.pool.roleLabel }}
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /usr/local/bin/roce-qos.sh
+          mode: 493
+          overwrite: true
+          contents:
+            source: "data:text/plain;charset=utf-8;base64,{{ tpl (.Files.Get "files/roce-qos.sh") . | b64enc }}"
+    systemd:
+      units:
+        - name: roce-qos.service
+          enabled: true
+          contents: |
+{{ .Files.Get "files/roce-qos.service" | indent 12 }}
+{{- end }}

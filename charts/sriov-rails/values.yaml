@@ -1,0 +1,30 @@
+# Phase 3 — SR-IOV RoCE rails. Source: §3 / §10.
+
+roleLabel: gpu-hpc          # node selector — must match node-foundation. §10
+servingNamespace: glm-serving   # where the SriovNetwork (NAD) is published
+mtu: 9000                   # §10 invariant — must match host PF + switch + pod NADs
+
+operator:
+  enabled: true
+  namespace: openshift-sriov-network-operator
+  operatorGroup: true
+  subscription:
+    name: sriov-network-operator
+    channel: stable
+    source: redhat-operators       # -> your mirrored CatalogSource
+    sourceNamespace: openshift-marketplace
+    installPlanApproval: Automatic
+
+# Per rail: VFs reported to kubelet as openshift.io/<name>; serving uses 1 VF/rail/pod,
+# 2nd VF is debug/validation headroom. pfName is per-SKU — keep a rail-map doc and verify
+# the socket with: cat /sys/class/net/<pf>/device/numa_node. Rails 0-3 socket0, 4-7 socket1.
+numVfs: 2
+rails:
+  - {name: rail0, pf: ens1f0np0, socket: 0, subnet: "172.16.0.0/24"}
+  - {name: rail1, pf: ens1f1np0, socket: 0, subnet: "172.16.1.0/24"}
+  - {name: rail2, pf: ens2f0np0, socket: 0, subnet: "172.16.2.0/24"}
+  - {name: rail3, pf: ens2f1np0, socket: 0, subnet: "172.16.3.0/24"}
+  - {name: rail4, pf: ens3f0np0, socket: 1, subnet: "172.16.4.0/24"}
+  - {name: rail5, pf: ens3f1np0, socket: 1, subnet: "172.16.5.0/24"}
+  - {name: rail6, pf: ens4f0np0, socket: 1, subnet: "172.16.6.0/24"}
+  - {name: rail7, pf: ens4f1np0, socket: 1, subnet: "172.16.7.0/24"}

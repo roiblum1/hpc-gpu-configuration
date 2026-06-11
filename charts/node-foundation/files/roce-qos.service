@@ -1,0 +1,12 @@
+[Unit]
+Description=RoCE rail QoS (trust dscp, PFC lossless, CNP marking)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/roce-qos.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

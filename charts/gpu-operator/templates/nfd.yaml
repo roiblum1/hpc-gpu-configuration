@@ -1,0 +1,41 @@
+{{- if .Values.nfd.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.nfd.namespace }}
+{{- if .Values.nfd.operatorGroup }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: nfd
+  namespace: {{ .Values.nfd.namespace }}
+spec:
+  targetNamespaces:
+    - {{ .Values.nfd.namespace }}
+{{- end }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ .Values.nfd.subscription.name }}
+  namespace: {{ .Values.nfd.namespace }}
+spec:
+  channel: {{ .Values.nfd.subscription.channel }}
+  name: {{ .Values.nfd.subscription.name }}
+  source: {{ .Values.nfd.subscription.source }}
+  sourceNamespace: {{ .Values.nfd.subscription.sourceNamespace }}
+  installPlanApproval: {{ .Values.nfd.subscription.installPlanApproval }}
+{{- if .Values.nfd.instance.enabled }}
+---
+# Default NFD instance — labels nodes (incl. PCIe/GPU vendor) the GPU Operator selects on.
+apiVersion: nfd.openshift.io/v1
+kind: NodeFeatureDiscovery
+metadata:
+  name: nfd-instance
+  namespace: {{ .Values.nfd.namespace }}
+spec:
+  instance: ""
+  topologyUpdater: false
+{{- end }}
+{{- end }}

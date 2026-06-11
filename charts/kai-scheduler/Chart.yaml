@@ -1,0 +1,17 @@
+apiVersion: v2
+name: kai-scheduler
+description: >-
+  Phase 5 — KAI Scheduler config: the queue hierarchy (org -> serving-interactive /
+  serving-batch / aux-cpu) and the serving/batch PriorityClasses. The KAI engine itself
+  is the upstream chart, referenced as an optional dependency (off by default for
+  disconnected installs — mirror it, or git clone/helm pull into charts/). One quota brain.
+type: application
+version: 0.1.0
+appVersion: "0.x"
+keywords: [openshift, kai-scheduler, gang-scheduling, queues, runai]
+dependencies:
+  - name: kai-scheduler
+    version: "*"
+    # Mirror the upstream chart and point this at your registry, then set upstream.install=true.
+    repository: "oci://<your-mirror-registry>/charts"
+    condition: upstream.install
