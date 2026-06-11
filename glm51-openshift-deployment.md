@@ -117,7 +117,7 @@ spec:
     isolated: "8-55,64-111"
   numa:
     topologyPolicy: "best-effort"      # see decision note below
-  memory: {}                            # MemoryManager Static is set by NTO when numa policy + reserved set
+  memory: {}                            # NTO should set MemoryManager Static — verify generated KubeletConfig at Gate 1
   hugepages:
     defaultHugepagesSize: "1G"
     pages:
@@ -134,7 +134,8 @@ spec:
     - "skew_tick=1"
     - "tsc=reliable"
     - "nowatchdog"
-  globallyDisableIrqLoadBalancing: false  # keep managed_irq so device IRQs land on reserved CPUs
+    - "nosoftlockup"
+  globallyDisableIrqLoadBalancing: false  # per-pod IRQ exclusion instead — see the runtime-class contract in 3.3
   nodeSelector:
     node-role.kubernetes.io/gpu-hpc: ""
   machineConfigPoolSelector:
@@ -171,6 +172,7 @@ spec:
         net.ipv4.tcp_rmem=4096 87380 268435456
         net.ipv4.tcp_wmem=4096 65536 268435456
         fs.aio-max-nr=1048576
+        vm.min_free_kbytes=4194304
         [vm]
         transparent_hugepages=madvise
   recommend:
@@ -179,6 +181,8 @@ spec:
       match:
         - label: node-role.kubernetes.io/gpu-hpc
 ```
+
+**`vm.min_free_kbytes=4194304` (4 GiB)** — with ~1 TB of CUDA-pinned memory per prefill node plus 9000-MTU ring buffers, the default free-page reserve is too small: atomic allocations (NIC rings, driver) start failing under reclaim pressure. 2–4 GiB is the standard reserve for RDMA-heavy hosts of this size.
 
 **Memlock for RDMA pods** — CRI-O's default memlock limit breaks ibverbs registration inside containers. Drop a CRI-O config via MachineConfig on the `gpu-hpc` pool:
 
@@ -202,6 +206,11 @@ for dev in $(ls /sys/class/infiniband/ | grep mlx5); do
   mlnx_qos -i $port --pfc 0,0,0,1,0,0,0,0          # lossless on priority 3
   echo 106 > /sys/class/infiniband/$dev/tc/1/traffic_class   # DSCP 26 + ECN
   cma_roce_tos -d $dev -t 106
+  echo 48 > /sys/class/net/$port/ecn/roce_np/cnp_dscp        # CNP marking — DSCP 48
+  echo 6  > /sys/class/net/$port/ecn/roce_np/cnp_802p_prio   # CNP egress priority 6
+  echo 1  > /sys/class/net/$port/ecn/roce_np/enable/3        # DCQCN NP/RP enabled on the lossless prio
+  echo 1  > /sys/class/net/$port/ecn/roce_rp/enable/3
+  ethtool -A $port rx off tx off || true   # global pause off — PFC only ("not modified" exits nonzero)
   ip link set $port mtu 9000
 done
 ```
@@ -214,8 +223,9 @@ Conventions used everywhere below (change once, change everywhere — see §10):
 - PCIe **Max Read Request Size 4096**, relaxed ordering enabled on NICs (`mlxconfig` / BIOS).
 - NPS=1 (EPYC chassis) unless you have a measured reason otherwise; Sub-NUMA Clustering **off** (Intel) — SNC multiplies NUMA nodes and breaks the "one socket = one NUMA = 4 GPUs + 4 rails" model the rest of this design assumes.
 - Performance power profile, C-states limited per latency policy.
+- **SMT: decide per chassis SKU and record it.** The 1.2 cpusets assume 112 logical CPUs (SMT off). If SMT stays on, `reserved`/`isolated` must contain complete sibling pairs — `full-pcpus-only` rejects GPU pods whose cpuset would split a physical core.
 
-**Gate 1:** on a rebooted node: `cat /proc/cmdline` shows all args; `oc describe node` shows hugepages and correct allocatable CPU; `tuned-adm active` shows the child profile; `mlnx_qos -i <port>` shows trust=dscp + PFC prio3; `nvidia-smi topo -m` (after Phase 2) shows PIX per GPU/NIC pair; container can `ulimit -l` → unlimited.
+**Gate 1:** on a rebooted node: `cat /proc/cmdline` shows all args; `oc describe node` shows hugepages and correct allocatable CPU; `tuned-adm active` shows the child profile; `mlnx_qos -i <port>` shows trust=dscp + PFC prio3; `cat /sys/class/net/<pf>/ecn/roce_np/cnp_dscp` → 48 on every rail; the NTO-generated KubeletConfig shows `memoryManagerPolicy: Static` (verify the inference, don't assume it); `/proc/interrupts` shows each rail NIC's mlx5 completion-queue IRQs on its local-socket reserved cores (the measurable reason both sockets sit in `reserved`); `nvidia-smi topo -m` (after Phase 2) shows PIX per GPU/NIC pair; container can `ulimit -l` → unlimited.
 
 ---
 
@@ -301,10 +311,14 @@ metadata:
 spec:
   resourceName: rail0
   networkNamespace: glm-serving
+  trust: "on"                  # several RoCE-on-VF recipes need VF trust for DSCP/QoS egress — verify at Gate 3
+  spoofChk: "off"
   ipam: |
     {"type": "whereabouts", "range": "172.16.0.0/24"}   # one /24 per rail, mirrors the fabric's per-rail subnets
   metaPlugins: ""
 ```
+
+Whereabouts allocations leak when nodes die ungracefully (gang evictions, drains): verify your CNI version runs the whereabouts ip-reconciler cron, or stale IPs in a rail /24 will eventually block reschedules.
 
 ### 3.3 How worker pods consume the rails (full-node pod pattern)
 
@@ -312,7 +326,10 @@ spec:
 metadata:
   annotations:
     k8s.v1.cni.cncf.io/networks: rail0,rail1,rail2,rail3,rail4,rail5,rail6,rail7
+    irq-load-balancing.crio.io: "disable"   # keep device IRQs off this pod's exclusive cores
+    cpu-quota.crio.io: "disable"            # no CFS throttling artifacts on the hot loop
 spec:
+  runtimeClassName: performance-gpu-hpc     # NTO generates performance-<profile name> from Phase 1.2
   containers:
     - resources:
         limits:
@@ -325,6 +342,8 @@ spec:
           hugepages-1Gi: 0Gi
 ```
 
+**The runtime-class lines are the second half of `globallyDisableIrqLoadBalancing: false` (1.2).** With `false`, managed (MSI-X) IRQs already avoid isolated cores, but other device IRQs can still land on the pod's pinned CPUs; the NTO-generated `performance-<profile>` RuntimeClass plus `irq-load-balancing.crio.io: "disable"` is the supported per-pod opt-out that actually delivers "device IRQs on reserved CPUs", and `cpu-quota.crio.io: "disable"` removes CFS throttling artifacts from the decode hot loop. The same runtime class also honors `cpu-c-states.crio.io: "disable"` and `cpu-freq-governor.crio.io: "performance"` — leave those off initially (disabling deep C-states across 96 isolated cores costs power and thermal headroom) and decide on Gate-6 ITL-jitter numbers, not principle.
+
 ### 3.4 Collective/transfer library environment (baked into worker pod env)
 
 ```bash
@@ -333,6 +352,7 @@ NCCL_IB_HCA=mlx5                        # all rail RDMA devices
 NCCL_IB_GID_INDEX=3                     # RoCEv2 (IPv4-mapped)
 NCCL_IB_TC=106                          # DSCP 26 → matches Phase 1.4 / switch QoS
 NCCL_IB_QPS_PER_CONNECTION=4
+NCCL_IB_PCI_RELAXED_ORDERING=1          # 1.5 enables RO on the NICs; this asks NCCL to use it (flag per pinned version)
 NCCL_CROSS_NIC=0                        # rail-aligned: GPU n talks via NIC n
 UCX_TLS=rc,cuda_copy,cuda_ipc           # NIXL uses UCX — this governs KV transfers
 UCX_NET_DEVICES=mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1
@@ -346,6 +366,7 @@ NCCL carries EP all-to-all and TP collectives; **UCX carries NIXL KV transfers (
 - `ib_write_bw` pod↔pod per rail: ≥ ~370 Gb/s per 400G rail.
 - `nccl-tests all_reduce_perf` single node (NVLink): bus BW at vendor reference for the SKU.
 - 2-node `all_reduce` and **`alltoall_perf`** (the EP-shaped collective) over 8 rails: near line-rate aggregate, **zero** PFC pause storms / `out_of_buffer` increments on switch and NIC counters during the run.
+- one nccl-tests pass with `NCCL_DEBUG=INFO`: the log must show GPUDirect RDMA actually engaged (`via GDRDMA`, DMA-BUF path) — Gate 2's `lsmod` proves module presence, not the data path.
 
 ---
 
@@ -505,10 +526,13 @@ spec:
       multinode: {nodeCount: 1}
       extraPodSpec:
         schedulerName: kai-scheduler
+        runtimeClassName: performance-gpu-hpc   # low-latency pod contract — see 3.3
         nodeSelector: {gpu.hpc/sku: h200}
       labels: {kai.scheduler/queue: serving-interactive}
       annotations:
         k8s.v1.cni.cncf.io/networks: rail0,rail1,rail2,rail3,rail4,rail5,rail6,rail7
+        irq-load-balancing.crio.io: "disable"
+        cpu-quota.crio.io: "disable"
       envs:
         - {name: DYN_KVBM_CPU_CACHE_GB,  value: "1024"}   # pinned DRAM tier — see sizing below
         - {name: DYN_KVBM_DISK_CACHE_GB, value: "2048"}   # on the LVMS kvcache PVC
@@ -533,10 +557,13 @@ spec:
       multinode: {nodeCount: 2}            # Grove gang: 2 nodes/replica — KAI schedules atomically
       extraPodSpec:
         schedulerName: kai-scheduler
+        runtimeClassName: performance-gpu-hpc   # low-latency pod contract — see 3.3
         nodeSelector: {gpu.hpc/sku: b200}
       labels: {kai.scheduler/queue: serving-interactive}
       annotations:
         k8s.v1.cni.cncf.io/networks: rail0,...,rail7
+        irq-load-balancing.crio.io: "disable"
+        cpu-quota.crio.io: "disable"
       mainContainer:
         args: ["--model", "/models/glm-5.1-nvfp4",
                "--tensor-parallel-size", "1",
@@ -557,7 +584,7 @@ spec:
 - **Planner:** start with static 4P:2×EP16D, run the SLA profiling job against real traffic mixes, then enable the SLA planner with your TTFT/ITL targets so P:D ratio follows the prefill-heavy-morning / decode-heavy-afternoon cycle. Planner scaling events create/destroy gangs — which is exactly why KAI's atomic gang semantics (Phase 5) are load-bearing.
 - **Batch lane = second, smaller DGD** (or scaled-down clone): queue `serving-batch`, preemptible PriorityClass, MTP off, aggressive max batch. Same model, same weights LV — only scheduling identity and engine tuning differ.
 
-**Gate 6:** `genai-perf` concurrency sweep meets TTFT/ITL targets per lane; disagg verified (NIXL transfer counters move, decode never prefilling long prompts); **session-park test**: 100K-token session → idle 10 min → resume; resume TTFT must be a small fraction of initial prefill and KVBM onboard counters must account for it.
+**Gate 6:** `genai-perf` concurrency sweep meets TTFT/ITL targets per lane; disagg verified (NIXL transfer counters move, decode never prefilling long prompts); **session-park test**: 100K-token session → idle 10 min → resume; resume TTFT must be a small fraction of initial prefill and KVBM onboard counters must account for it; **NUMA evidence**: on a loaded prefill worker, `numastat -p <engine pid>` shows the pinned CPU tier split across both sockets — if it piles onto socket 0, runtime thread pinning is wrong and socket-1 GPUs pay UPI latency on every tier access.
 
 ---
 
@@ -624,9 +651,10 @@ Each row is one value that multiple layers must agree on. When something is "mys
 | Invariant | Must match in |
 |-----------|---------------|
 | **MTU 9000** | NIC PF (Phase 1.4) · `SriovNetworkNodePolicy.mtu` · switch fabric · pod NADs |
-| **DSCP 26 / TC 106 / GID index 3 (RoCEv2)** | `mlnx_qos`/tc files (1.4) · switch PFC/ECN config · `NCCL_IB_TC`+`NCCL_IB_GID_INDEX` · `UCX_IB_TRAFFIC_CLASS`+`UCX_IB_GID_INDEX` |
+| **DSCP 26 / TC 106 / GID index 3 (RoCEv2)** | `mlnx_qos`/tc files (1.4) · switch PFC/ECN config · `NCCL_IB_TC`+`NCCL_IB_GID_INDEX` · `UCX_IB_TRAFFIC_CLASS`+`UCX_IB_GID_INDEX` · CNP DSCP 48/prio 6 (`roce_np` ↔ switch CNP queue) |
 | **Rail map (GPU n ↔ NIC n ↔ socket)** | physical cabling doc · `pfNames` per rail policy · `NCCL_CROSS_NIC=0` assumption · `nvidia-smi topo -m` evidence |
 | **Full-node pod granularity** | `topologyPolicy: best-effort` · pod requests = 8 GPU + 8 VFs + integer CPUs · runtime-internal NUMA pinning |
+| **Low-latency pod contract** | NTO-generated `runtimeClassName: performance-gpu-hpc` · `irq-load-balancing.crio.io`/`cpu-quota.crio.io` disable annotations (3.3/6.4) · `globallyDisableIrqLoadBalancing: false` relies on this per-pod opt-out |
 | **Reserved CPUs (0-7,56-63)** | PerformanceProfile · IRQ affinity (managed_irq) · *nothing else* scheduled there — frontends live on infra nodes, aux pods float on the isolated shared pool |
 | **Hugepages stay small** | PerformanceProfile count · KVBM uses CUDA-pinned regular pages — DRAM must remain free for it |
 | **memlock unlimited** | CRI-O drop-in (1.3) · RDMA registration in every worker · KVBM pinned tier |

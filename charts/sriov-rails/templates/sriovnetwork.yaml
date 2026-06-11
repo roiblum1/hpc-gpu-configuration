@@ -8,6 +8,8 @@ metadata:
 spec:
   resourceName: {{ $r.name }}
   networkNamespace: {{ $.Values.servingNamespace }}
+  trust: "{{ $.Values.vf.trust }}"
+  spoofChk: "{{ $.Values.vf.spoofChk }}"
   ipam: |
     {"type": "whereabouts", "range": "{{ $r.subnet }}"}
   metaPlugins: ""

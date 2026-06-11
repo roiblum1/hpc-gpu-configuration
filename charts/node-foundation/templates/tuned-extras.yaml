@@ -19,6 +19,7 @@ spec:
         net.ipv4.tcp_rmem=4096 87380 268435456
         net.ipv4.tcp_wmem=4096 65536 268435456
         fs.aio-max-nr=1048576
+        vm.min_free_kbytes=4194304
         [vm]
         transparent_hugepages=madvise
   recommend:

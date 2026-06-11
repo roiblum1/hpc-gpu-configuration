@@ -41,12 +41,13 @@ The `upstream:` block in each `values.yaml` documents this and carries pass-thro
 
 Several values are repeated across charts and **must stay identical**. They are surfaced at the top of each chart's `values.yaml` with a `# §10` marker. Change them in one place and grep the others:
 
-- **RoCE QoS: DSCP 26 / traffic-class 106 / GID index 3** — `node-foundation` (host), `sriov-rails` (VF), `glm51-dynamo` (NCCL/UCX env).
+- **RoCE QoS: DSCP 26 / traffic-class 106 / GID index 3, CNP DSCP 48 / prio 6** — `node-foundation` (host), `sriov-rails` (VF), `glm51-dynamo` (NCCL/UCX env), switch fabric (PFC/ECN + CNP queue).
 - **MTU 9000** — `node-foundation`, `sriov-rails`, `glm51-dynamo` NADs.
 - **Node role label `gpu-hpc` + SKU label `gpu.hpc/sku`** — `node-foundation`, `gpu-operator`, `sriov-rails`, `lvms-storage`, `glm51-dynamo`.
 - **Reserved CPUs `0-7,56-63`** — `node-foundation` only (consumed implicitly by pod integer CPU requests in `glm51-dynamo`).
 - **KVBM ordering GPU-KV ≤ CPU_CACHE ≤ DISK_CACHE** — `glm51-dynamo` (envs + pod memory) and `lvms-storage` (PVC size).
 - **One quota brain (KAI) / one router (Dynamo KV router)** — do not add a second scheduler or an endpoint-picker in front of the Dynamo frontend.
+- **Low-latency pod contract** — `glm51-dynamo` workers set `runtimeClassName: performance-gpu-hpc` (NTO generates it from `node-foundation`'s PerformanceProfile name) + `irq-load-balancing.crio.io`/`cpu-quota.crio.io` disable annotations. Rename the profile and the runtime class name must follow.
 
 ## What is *not* a chart
 

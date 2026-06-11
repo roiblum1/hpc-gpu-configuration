@@ -6,6 +6,8 @@ set -euo pipefail
 
 PFC_PRIO={{ .Values.roceQos.pfcPriority }}
 TRAFFIC_CLASS={{ .Values.roceQos.trafficClass }}   # DSCP 26 + ECN
+CNP_DSCP={{ .Values.roceQos.cnpDscp }}
+CNP_PRIO={{ .Values.roceQos.cnpPriority }}
 MTU={{ .Values.roceQos.mtu }}
 
 # Build the 8-element PFC vector with the lossless bit set at PFC_PRIO (e.g. prio 3 -> 0,0,0,1,0,0,0,0)
@@ -21,5 +23,10 @@ for dev in $(ls /sys/class/infiniband/ | grep mlx5); do
   mlnx_qos -i "$port" --pfc "$pfc"
   echo "$TRAFFIC_CLASS" > /sys/class/infiniband/$dev/tc/1/traffic_class
   cma_roce_tos -d "$dev" -t "$TRAFFIC_CLASS"
+  echo "$CNP_DSCP" > /sys/class/net/$port/ecn/roce_np/cnp_dscp       # CNP marking
+  echo "$CNP_PRIO" > /sys/class/net/$port/ecn/roce_np/cnp_802p_prio  # CNP egress priority
+  echo 1 > /sys/class/net/$port/ecn/roce_np/enable/$PFC_PRIO         # DCQCN NP/RP on the lossless prio
+  echo 1 > /sys/class/net/$port/ecn/roce_rp/enable/$PFC_PRIO
+  ethtool -A "$port" rx off tx off || true   # global pause off — PFC only ("not modified" exits nonzero)
   ip link set "$port" mtu "$MTU"
 done

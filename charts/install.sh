@@ -11,13 +11,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # (namespace here is the release namespace for cluster-scoped objects; CRs target their own ns)
 PLAN=(
   "model-staging|glm-serving|Gate 0: weights staged + checksummed on every GPU node"
-  "node-foundation|default|Gate 1: /proc/cmdline args, hugepages allocatable, tuned-adm active, mlnx_qos trust=dscp+PFC prio3, container ulimit -l unlimited"
+  "node-foundation|default|Gate 1: /proc/cmdline args, hugepages allocatable, tuned-adm active, mlnx_qos trust=dscp+PFC prio3, cnp_dscp=48, rail IRQs on local reserved CPUs, kubeletconfig memoryManagerPolicy=Static, container ulimit -l unlimited"
   "gpu-operator|nvidia-gpu-operator|Gate 2: nvidia-smi topo -m shows PIX GPU<->NIC; lsmod nvidia(open)/nvidia_fs/gdrdrv; DCGM in UWM Prometheus"
-  "sriov-rails|openshift-sriov-network-operator|Gate 3: ib_write_bw >=370Gb/s/rail; nccl all_reduce at ref; 2-node alltoall clean, zero PFC pause/out_of_buffer"
+  "sriov-rails|openshift-sriov-network-operator|Gate 3: ib_write_bw >=370Gb/s/rail; nccl all_reduce at ref; 2-node alltoall clean, zero PFC pause/out_of_buffer; NCCL_DEBUG=INFO log shows GDRDMA"
   "lvms-storage|openshift-storage|Gate 4: fio 1M seq read ~= aggregate NVMe; gdsio shows GDS active; fallocate -l 1G succeeds"
   "cert-manager|cert-manager-operator|(prereq for Dynamo operator webhooks)"
   "kai-scheduler|kai-scheduler|Gate 5: 2-node LWS with 1 node free stays Pending (zero partial bind); free node -> both bind; batch gang evicted whole on interactive submit"
-  "glm51-dynamo|glm-serving|Gate 6: genai-perf meets TTFT/ITL per lane; NIXL disagg counters move; 100K session park/resume TTFT is small fraction of initial"
+  "glm51-dynamo|glm-serving|Gate 6: genai-perf meets TTFT/ITL per lane; NIXL disagg counters move; 100K session park/resume TTFT is small fraction of initial; numastat: pinned tier on both sockets"
   "gateway-tenancy|kuadrant-system|Gate 7: no key->401; over budget->429; 131K output clamped; both lanes reach their DGDs"
   "observability|openshift-monitoring|Gate 8: 72h mixed-traffic soak; SLOs hold through planner rescale + one node drain; no fabric pause storms"
 )

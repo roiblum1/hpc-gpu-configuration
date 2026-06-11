@@ -22,6 +22,11 @@ fabric:
   ncclHca: mlx5
   ucxNetDevices: "mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1"
 
+# Low-latency pod contract (§3.3 / §10): NTO generates RuntimeClass performance-<name>
+# from node-foundation's performanceProfile.name; required for the CRI-O IRQ/cpu-quota
+# annotations on GPU workers to take effect. Must track that chart's profile name.
+runtimeClassName: performance-gpu-hpc
+
 # Scheduling identity — one quota brain (KAI). §5 / §10
 scheduler: kai-scheduler
 queues:

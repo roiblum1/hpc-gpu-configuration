@@ -4,6 +4,12 @@ roleLabel: gpu-hpc          # node selector — must match node-foundation. §10
 servingNamespace: glm-serving   # where the SriovNetwork (NAD) is published
 mtu: 9000                   # §10 invariant — must match host PF + switch + pod NADs
 
+# VF attributes on every rail NAD. Several RoCE-on-VF recipes need trust=on for the VF
+# to honor DSCP/QoS egress marking — verify at Gate 3 (DSCP counters on the switch).
+vf:
+  trust: "on"
+  spoofChk: "off"
+
 operator:
   enabled: true
   namespace: openshift-sriov-network-operator

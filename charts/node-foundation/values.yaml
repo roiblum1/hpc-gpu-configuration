@@ -11,6 +11,8 @@ performanceProfile:
   name: gpu-hpc
   cpu:
     # 8 cores/socket reserved on BOTH sockets (per-NUMA memory + NIC IRQ steering). §10
+    # Assumes 112 logical CPUs = SMT off (§1.5). If SMT is on, reserved/isolated must
+    # contain complete sibling pairs or full-pcpus-only rejects the GPU pods.
     reserved: "0-7,56-63"
     isolated: "8-55,64-111"
   numa:
@@ -31,7 +33,9 @@ performanceProfile:
     - "skew_tick=1"
     - "tsc=reliable"
     - "nowatchdog"
-  # keep managed_irq so device IRQs land on reserved CPUs
+    - "nosoftlockup"
+  # false: per-pod IRQ exclusion via the performance RuntimeClass + irq-load-balancing.crio.io
+  # annotation on glm51-dynamo workers — the §3.3 low-latency pod contract. §10
   globallyDisableIrqLoadBalancing: false
 
 tuned:
@@ -49,6 +53,7 @@ crioMemlock:
 roceQos:
   enabled: true
   trafficClass: 106    # DSCP 26 + ECN  -> tc/1/traffic_class and cma_roce_tos
-  cnpDscp: 48          # CNP priority 6 (switch side mirrors this)
+  cnpDscp: 48          # CNP marking -> ecn/roce_np/cnp_dscp (switch CNP queue mirrors this)
+  cnpPriority: 6       # CNP egress priority -> ecn/roce_np/cnp_802p_prio
   pfcPriority: 3       # lossless priority
   mtu: 9000

@@ -46,10 +46,11 @@ It is written as an **ordered build sequence**, not a reference manual. Read and
 
 **The hard part of this repo is cross-layer consistency.** Many concrete values appear in several phases — and now in several charts — and *must* stay identical. If you change one, grep **both** the document and `charts/*/values.yaml` (`# §10` markers), update every occurrence, then check it against §10. The load-bearing shared values:
 
-- **RoCE QoS triple: DSCP 26 / traffic class 106 / GID index 3 (RoCEv2).** Appears in the host `mlnx_qos`/`tc` config (1.4), `NCCL_IB_TC` + `NCCL_IB_GID_INDEX`, `UCX_IB_TRAFFIC_CLASS` + `UCX_IB_GID_INDEX` (3.4), and the switch fabric. NCCL (collectives) and UCX (NIXL KV transfers) must agree or one silently rides the lossy queue.
+- **RoCE QoS triple: DSCP 26 / traffic class 106 / GID index 3 (RoCEv2).** Appears in the host `mlnx_qos`/`tc` config (1.4), `NCCL_IB_TC` + `NCCL_IB_GID_INDEX`, `UCX_IB_TRAFFIC_CLASS` + `UCX_IB_GID_INDEX` (3.4), and the switch fabric. NCCL (collectives) and UCX (NIXL KV transfers) must agree or one silently rides the lossy queue. The CNP side (DSCP 48 / priority 6, `roce_np` sysfs) is pinned in the same host script and must mirror the switch CNP queue.
 - **MTU 9000 end-to-end** — NIC PF, `SriovNetworkNodePolicy.mtu`, pod NADs, switch.
 - **Rail map: GPU n ↔ NIC n ↔ socket.** Rails 0–3 on socket 0, 4–7 on socket 1; assumes `NCCL_CROSS_NIC=0`; evidence is `nvidia-smi topo -m` showing PIX/PXB (not NODE/SYS).
 - **Full-node pod granularity** — one worker pod = 8 GPUs + 8 rail VFs + integer CPUs (Guaranteed QoS). This is *why* `topologyPolicy: best-effort` is used instead of `single-numa-node` (which would reject these pods); intra-pod NUMA correctness is delegated to the runtime.
+- **Low-latency pod contract** — GPU worker pods carry `runtimeClassName: performance-gpu-hpc` (NTO-generated from the PerformanceProfile name) plus `irq-load-balancing.crio.io`/`cpu-quota.crio.io: "disable"` annotations. This is the per-pod half of `globallyDisableIrqLoadBalancing: false` — remove one side and IRQ isolation silently degrades.
 - **KVBM tier ordering: GPU-KV ≤ `DYN_KVBM_CPU_CACHE_GB` ≤ `DYN_KVBM_DISK_CACHE_GB`**, with pod memory ≥ CPU tier and LVMS PVC ≥ disk tier. Violating the ordering misconfigures the cache.
 - **Reserved CPUs `0-7,56-63`** in the PerformanceProfile — kept on both sockets deliberately for per-NUMA memory + NIC IRQ steering.
 

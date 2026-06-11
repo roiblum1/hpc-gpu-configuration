@@ -9,7 +9,7 @@ spec:
     isolated: "{{ .Values.performanceProfile.cpu.isolated }}"
   numa:
     topologyPolicy: "{{ .Values.performanceProfile.numa.topologyPolicy }}"
-  # MemoryManager Static is set by NTO when numa policy + reserved are set
+  # NTO should set MemoryManager Static — verify the generated KubeletConfig at Gate 1
   memory: {}
   hugepages:
     defaultHugepagesSize: "{{ .Values.performanceProfile.hugepages.defaultSize }}"

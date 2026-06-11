@@ -30,8 +30,10 @@ spec:
         kai.scheduler/queue: {{ .Values.queues.batch }}
       annotations:
         k8s.v1.cni.cncf.io/networks: {{ include "glm51.railAnnotation" . }}
+        {{- include "glm51.lowLatencyAnnotations" . | nindent 8 }}
       extraPodSpec:
         schedulerName: {{ .Values.scheduler }}
+        runtimeClassName: {{ .Values.runtimeClassName }}   # low-latency pod contract — §3.3
         priorityClassName: {{ .Values.priorityClasses.batch }}
         nodeSelector:
           gpu.hpc/sku: {{ .Values.sku.prefill }}
@@ -89,8 +91,10 @@ spec:
         kai.scheduler/queue: {{ .Values.queues.batch }}
       annotations:
         k8s.v1.cni.cncf.io/networks: {{ include "glm51.railAnnotation" . }}
+        {{- include "glm51.lowLatencyAnnotations" . | nindent 8 }}
       extraPodSpec:
         schedulerName: {{ .Values.scheduler }}
+        runtimeClassName: {{ .Values.runtimeClassName }}   # low-latency pod contract — §3.3
         priorityClassName: {{ .Values.priorityClasses.batch }}
         nodeSelector:
           gpu.hpc/sku: {{ .Values.sku.decode }}
