@@ -1,0 +1,128 @@
+{{- if .Values.batchLane.enabled }}
+# Batch lane — smaller clone of the interactive DGD. Same model + same weights LV;
+# differs only in scheduling identity (serving-batch queue, preemptible priority) and
+# engine tuning: MTP OFF, aggressive batching. §6.4 / §6.1 batch note.
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: glm51-batch
+  namespace: {{ .Values.namespace }}
+spec:
+  services:
+
+    Frontend:
+      replicas: {{ .Values.batchLane.frontendReplicas }}
+      extraPodSpec:
+        nodeSelector:
+          {{ .Values.frontend.infraNodeLabel }}: ""
+      mainContainer:
+        args: ["--router-mode", "{{ .Values.frontend.routerMode }}"]
+        resources:
+          requests:
+            cpu: "{{ .Values.frontend.resources.cpu }}"
+            memory: {{ .Values.frontend.resources.memory }}
+
+    GLM51Prefill:
+      replicas: {{ .Values.batchLane.prefillReplicas }}
+      multinode:
+        nodeCount: {{ .Values.prefill.nodeCount }}
+      labels:
+        kai.scheduler/queue: {{ .Values.queues.batch }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: {{ include "glm51.railAnnotation" . }}
+      extraPodSpec:
+        schedulerName: {{ .Values.scheduler }}
+        priorityClassName: {{ .Values.priorityClasses.batch }}
+        nodeSelector:
+          gpu.hpc/sku: {{ .Values.sku.prefill }}
+        volumes:
+          - name: models
+            hostPath:
+              path: {{ .Values.modelsHostPath }}
+              type: Directory
+          - name: kvdisk
+            ephemeral:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  storageClassName: {{ .Values.prefill.diskPvc.storageClass }}
+                  resources:
+                    requests:
+                      storage: {{ .Values.prefill.diskPvc.size }}
+      envs:
+        {{- include "glm51.fabricEnv" . | nindent 8 }}
+        - {name: DYN_KVBM_CPU_CACHE_GB,  value: "{{ .Values.prefill.kvbm.cpuCacheGb }}"}
+        - {name: DYN_KVBM_DISK_CACHE_GB, value: "{{ .Values.prefill.kvbm.diskCacheGb }}"}
+        - {name: DYN_KVBM_LEADER_WORKER_INIT_TIMEOUT_SECS, value: "{{ .Values.prefill.kvbm.initTimeoutSecs }}"}
+      mainContainer:
+        args:
+          - "--model"
+          - "{{ .Values.modelPaths.fp8 }}"
+          - "--tensor-parallel-size"
+          - "{{ .Values.prefill.tensorParallel }}"
+          - "--enable-expert-parallel"
+          - "--kv-cache-dtype"
+          - "{{ .Values.prefill.kvCacheDtype }}"
+          - "--max-model-len"
+          - "{{ .Values.maxModelLen }}"
+          - "--enable-chunked-prefill"
+          - "--connector"
+          - "{{ .Values.prefill.connector }}"
+          - "--is-prefill-worker"
+        resources:
+          limits:
+            nvidia.com/gpu: {{ .Values.prefill.resources.gpu }}
+            {{- range .Values.rails }}
+            openshift.io/{{ . }}: "1"
+            {{- end }}
+            cpu: "{{ .Values.prefill.resources.cpu }}"
+            memory: {{ .Values.prefill.resources.memory }}
+        volumeMounts:
+          - {name: models, mountPath: /models, readOnly: true}
+          - {name: kvdisk, mountPath: /kvbm-disk}
+
+    GLM51Decode:
+      replicas: {{ .Values.batchLane.decodeReplicas }}
+      multinode:
+        nodeCount: {{ .Values.decode.nodeCount }}
+      labels:
+        kai.scheduler/queue: {{ .Values.queues.batch }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: {{ include "glm51.railAnnotation" . }}
+      extraPodSpec:
+        schedulerName: {{ .Values.scheduler }}
+        priorityClassName: {{ .Values.priorityClasses.batch }}
+        nodeSelector:
+          gpu.hpc/sku: {{ .Values.sku.decode }}
+        volumes:
+          - name: models
+            hostPath:
+              path: {{ .Values.modelsHostPath }}
+              type: Directory
+      envs:
+        {{- include "glm51.fabricEnv" . | nindent 8 }}
+      mainContainer:
+        args:
+          - "--model"
+          - "{{ .Values.modelPaths.nvfp4 }}"
+          - "--tensor-parallel-size"
+          - "{{ .Values.decode.tensorParallel }}"
+          - "--data-parallel-size"
+          - "{{ .Values.decode.dataParallel }}"
+          - "--enable-expert-parallel"
+          - "--kv-cache-dtype"
+          - "{{ .Values.decode.kvCacheDtype }}"
+          - "--max-model-len"
+          - "{{ .Values.maxModelLen }}"
+          # MTP intentionally OFF on the batch lane (verification overhead beats batching gains at high batch)
+        resources:
+          limits:
+            nvidia.com/gpu: {{ .Values.decode.resources.gpu }}
+            {{- range .Values.rails }}
+            openshift.io/{{ . }}: "1"
+            {{- end }}
+            cpu: "{{ .Values.decode.resources.cpu }}"
+            memory: {{ .Values.decode.resources.memory }}
+        volumeMounts:
+          - {name: models, mountPath: /models, readOnly: true}
+{{- end }}

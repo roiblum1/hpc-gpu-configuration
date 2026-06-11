@@ -1,0 +1,10 @@
+apiVersion: v2
+name: model-staging
+description: >-
+  Phase 0 — pre-stage GLM-5.1 weights (FP8 + NVFP4) to local NVMe on every GPU node via a
+  DaemonSet, so worker pods mount them read-only and pod restarts cost zero pull time. Avoids
+  serving ~754GB through serialized CRI-O image-layer extraction. Idempotent (checksum marker).
+type: application
+version: 0.1.0
+appVersion: "5.1"
+keywords: [skopeo, rsync, model-weights, disconnected, daemonset, staging]

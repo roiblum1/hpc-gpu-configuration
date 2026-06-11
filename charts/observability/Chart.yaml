@@ -1,0 +1,11 @@
+apiVersion: v2
+name: observability
+description: >-
+  Phase 8 — close the loop. ServiceMonitors (Dynamo frontend, RoCE/SR-IOV exporter) feeding
+  User Workload Monitoring, and a PrometheusRule with the §8 alert minimums: PFC pause storm,
+  MTP acceptance collapse, prefix-hit-rate drop, thin-pool exhaustion, gang Pending, etcd/NATS.
+  Metric names are placeholders — confirm against your exporters (see TODO comments).
+type: application
+version: 0.1.0
+appVersion: "4.20"
+keywords: [prometheus, servicemonitor, alerts, dcgm, roce, kvbm, observability]

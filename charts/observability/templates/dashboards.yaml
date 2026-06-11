@@ -1,0 +1,21 @@
+{{- if .Values.dashboards.enabled }}
+# Stub for the "single goodput view" (§8). Populate panels.json with a Grafana dashboard
+# covering: TTFT/ITL/throughput per lane, prefix/KVBM hit rates, MTP acceptance, EP load skew,
+# per-rail RoCE counters, DCGM SM/HBM/NVLink, thin-pool data%, gang pending/reclaim.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glm51-goodput-dashboard
+  namespace: {{ .Values.namespace }}
+  labels:
+    console.openshift.io/dashboard: "true"
+data:
+  panels.json: |
+    {
+      "title": "GLM-5.1 Goodput",
+      "uid": "glm51-goodput",
+      "schemaVersion": 39,
+      "panels": [],
+      "__note": "Stub — add panels per the §8 signal table."
+    }
+{{- end }}

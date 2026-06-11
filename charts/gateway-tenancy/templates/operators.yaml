@@ -1,0 +1,43 @@
+{{- if .Values.operators.servicemesh.enabled }}
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ .Values.operators.servicemesh.subscription.name }}
+  namespace: {{ .Values.operators.servicemesh.namespace }}
+spec:
+  channel: {{ .Values.operators.servicemesh.subscription.channel }}
+  name: {{ .Values.operators.servicemesh.subscription.name }}
+  source: {{ .Values.operators.servicemesh.subscription.source }}
+  sourceNamespace: {{ .Values.operators.servicemesh.subscription.sourceNamespace }}
+  installPlanApproval: {{ .Values.operators.servicemesh.subscription.installPlanApproval }}
+{{- end }}
+{{- if .Values.operators.kuadrant.enabled }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.operators.kuadrant.namespace }}
+{{- if .Values.operators.kuadrant.operatorGroup }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kuadrant
+  namespace: {{ .Values.operators.kuadrant.namespace }}
+spec:
+  targetNamespaces:
+    - {{ .Values.operators.kuadrant.namespace }}
+{{- end }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ .Values.operators.kuadrant.subscription.name }}
+  namespace: {{ .Values.operators.kuadrant.namespace }}
+spec:
+  channel: {{ .Values.operators.kuadrant.subscription.channel }}
+  name: {{ .Values.operators.kuadrant.subscription.name }}
+  source: {{ .Values.operators.kuadrant.subscription.source }}
+  sourceNamespace: {{ .Values.operators.kuadrant.subscription.sourceNamespace }}
+  installPlanApproval: {{ .Values.operators.kuadrant.subscription.installPlanApproval }}
+{{- end }}

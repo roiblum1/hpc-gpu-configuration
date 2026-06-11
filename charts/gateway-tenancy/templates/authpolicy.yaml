@@ -1,0 +1,34 @@
+{{- if .Values.tenancy.authPolicy.enabled }}
+# API key per team/service -> tenant identity. Attached to the Gateway (covers both lanes).
+# Kuadrant CR schema tracks your mirrored RHCL version — adjust fields/apiVersion to match.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: {{ .Values.tenancy.authPolicy.name }}
+  namespace: {{ .Values.ingressNamespace }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name }}
+  rules:
+    authentication:
+      api-key:
+        apiKey:
+          allNamespaces: true
+          selector:
+            matchLabels:
+              kuadrant.io/apikeys-by: {{ .Values.tenancy.authPolicy.apiKeySelectorLabel }}
+        credentials:
+          authorizationHeader:
+            prefix: {{ .Values.tenancy.authPolicy.credentialPrefix }}
+    response:
+      success:
+        filters:
+          # Expose the key's tenant so RateLimitPolicy can key budgets on it.
+          tenant:
+            json:
+              properties:
+                tenant:
+                  selector: auth.identity.metadata.annotations.tenant
+{{- end }}

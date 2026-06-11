@@ -1,0 +1,69 @@
+# Phase 7 — Gateway + tenancy. Source: §7 / §10.
+# One routing brain: Dynamo's KV router IS the inference router. This layer must NOT pick
+# endpoints (no GIE EPP in front of the frontend). Kuadrant CR apiVersions track the RHCL
+# version you mirrored — adjust group/version if your bundle differs.
+
+ingressNamespace: openshift-ingress
+servingNamespace: glm-serving
+
+operators:
+  servicemesh:                 # OSSM3 provides the openshift-default Gateway API (Istio-based)
+    enabled: true
+    namespace: openshift-operators
+    operatorGroup: false       # openshift-operators already has a global OperatorGroup
+    subscription:
+      name: servicemeshoperator3
+      channel: stable
+      source: redhat-operators
+      sourceNamespace: openshift-marketplace
+      installPlanApproval: Automatic
+  kuadrant:                    # RH Connectivity Link (Auth/RateLimit)
+    enabled: true
+    namespace: kuadrant-system
+    operatorGroup: true
+    subscription:
+      name: rhcl-operator
+      channel: stable
+      source: redhat-operators
+      sourceNamespace: openshift-marketplace
+      installPlanApproval: Automatic
+
+gateway:
+  name: llm-gw
+  gatewayClassName: openshift-default
+  port: 443
+  hostnameInteractive: llm.apps.example.com
+  hostnameBatch: llm-batch.apps.example.com
+  tls:
+    certificateRef: llm-tls
+    # cert-manager Certificate for the listener cert (needs the cert-manager chart).
+    # Provide an issuer to render it; leave issuer.name empty to bring your own secret.
+    certificate:
+      enabled: true
+      issuer:
+        name: ""               # e.g. a ClusterIssuer name
+        kind: ClusterIssuer
+
+routes:
+  interactive:
+    name: glm51-interactive
+    backendService: glm51-frontend
+  batch:
+    name: glm51-batch
+    backendService: glm51-batch-frontend
+  backendPort: 8000
+
+tenancy:
+  authPolicy:
+    enabled: true
+    name: llm-apikey
+    apiKeySelectorLabel: llm-apikeys     # Secrets labelled with this hold per-team API keys
+    credentialPrefix: APIKEY
+  rateLimit:
+    enabled: true
+    # Limit TOKENS not requests — agentic traffic is wildly asymmetric (§7).
+    # If your RHCL version lacks token-aware limits, set tokenAware=false to fall back to
+    # request-rate limiting + a hard max_tokens cap enforced at the frontend.
+    tokenAware: true
+    interactiveTokensPerMin: 200000
+    batchTokensPerMin: 2000000

@@ -1,0 +1,35 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Values.routes.interactive.name }}
+  namespace: {{ .Values.servingNamespace }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      namespace: {{ .Values.ingressNamespace }}
+      sectionName: https-interactive
+  hostnames: ["{{ .Values.gateway.hostnameInteractive }}"]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+      backendRefs:
+        - name: {{ .Values.routes.interactive.backendService }}
+          port: {{ .Values.routes.backendPort }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Values.routes.batch.name }}
+  namespace: {{ .Values.servingNamespace }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.name }}
+      namespace: {{ .Values.ingressNamespace }}
+      sectionName: https-batch
+  hostnames: ["{{ .Values.gateway.hostnameBatch }}"]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+      backendRefs:
+        - name: {{ .Values.routes.batch.backendService }}
+          port: {{ .Values.routes.backendPort }}

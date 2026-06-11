@@ -30,12 +30,12 @@ The document is an **ordered build sequence with validation gates** — *do not 
 
 ## The two upstream components (KAI, Dynamo)
 
-`kai-scheduler` and `glm51-dynamo` only contain **our configuration** (queues, priority classes, the DynamoGraphDeployment). The large upstream engines are referenced as Helm **dependencies** and are **off by default** (`upstream.install: false`) because this is a disconnected environment:
+`kai-scheduler` and `glm51-dynamo` only contain **our configuration** (queues, priority classes, the DynamoGraphDeployments) so they render and install **standalone** — no network or vendoring needed. The large upstream engines (the KAI scheduler itself; the Dynamo platform = operator + etcd + NATS) are installed **separately**, before our config:
 
-- Mirror the upstream chart to your registry and set the OCI/repo URL + `upstream.install: true` in the chart's `values.yaml`, **or**
-- `git clone` / `helm pull` the upstream chart into `charts/<chart>/charts/` and run `helm dependency build`.
+- `git clone` / `helm pull` the upstream chart, mirror its images to your registry, and `helm install` it directly (pin etcd/NATS to infra nodes, enable KAI bin-packing/topology placement), **or**
+- vendor it as a subchart: add a `dependencies:` stanza to the chart's `Chart.yaml` pointing at your mirror, drop the chart into `charts/<chart>/charts/`, and run `helm dependency build`.
 
-Both upstream charts (and all operator images) must be mirrored per Phase 0. Every image/chart reference in these values uses a `<your-registry>` / `<your-mirror>` placeholder — pin them to your mirror and record the digests.
+The `upstream:` block in each `values.yaml` documents this and carries pass-through values for the vendored case. All operator images and both upstream charts must be mirrored per Phase 0. Every image/chart reference uses a `<your-registry>` / `<your-mirror>` placeholder — pin them and record the digests.
 
 ## Cross-layer invariants (§10 of the source doc)
 

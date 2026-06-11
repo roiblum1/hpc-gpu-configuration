@@ -1,0 +1,35 @@
+# Phase 8 — Observability. Source: §8.
+# DCGM's ServiceMonitor is created by the GPU Operator (gpu-operator chart). This chart adds
+# the serving + fabric monitors and the alert rules. Requires User Workload Monitoring enabled.
+
+namespace: openshift-monitoring
+servingNamespace: glm-serving
+storageNamespace: openshift-storage
+
+serviceMonitors:
+  dynamoFrontend:
+    enabled: true
+    namespace: glm-serving
+    matchLabels:
+      app.kubernetes.io/part-of: dynamo
+    port: metrics
+    interval: 15s
+  roceExporter:
+    enabled: true
+    namespace: openshift-monitoring
+    matchLabels:
+      app: sriov-network-metrics-exporter
+    port: metrics
+    interval: 30s
+
+# §8 alert minimums. Thresholds are starting points — tune at Gate 6/8.
+alerts:
+  enabled: true
+  gangPendingSeconds: 300        # gang Pending > N min in serving-interactive
+  thinPoolPercent: 80            # kvcache thin pool exhaustion is a node-level incident
+  mtpAcceptanceMin: 0.4          # below threshold MTP is pure overhead
+  prefixHitRateMin: 0.3          # drop = cache thrash
+  pfcPauseSecondsPer5m: 0.001    # any sustained PFC pause = fabric QoS drift
+
+dashboards:
+  enabled: true                  # ConfigMap stub for a "single goodput view" dashboard

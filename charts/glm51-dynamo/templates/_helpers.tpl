@@ -1,0 +1,21 @@
+{{/* Comma-joined rail NAD annotation value, e.g. rail0,rail1,...,rail7 */}}
+{{- define "glm51.railAnnotation" -}}
+{{- join "," .Values.rails -}}
+{{- end -}}
+
+{{/*
+Collective/transfer env vars (NCCL + UCX), §3.4. Rendered as DynamoGraphDeployment
+envs[] entries. Call with the root context. Indent at the call site.
+*/}}
+{{- define "glm51.fabricEnv" -}}
+- {name: NCCL_SOCKET_IFNAME, value: "eth0"}
+- {name: NCCL_IB_HCA, value: "{{ .Values.fabric.ncclHca }}"}
+- {name: NCCL_IB_GID_INDEX, value: "{{ .Values.fabric.gidIndex }}"}
+- {name: NCCL_IB_TC, value: "{{ .Values.fabric.trafficClass }}"}
+- {name: NCCL_IB_QPS_PER_CONNECTION, value: "4"}
+- {name: NCCL_CROSS_NIC, value: "0"}
+- {name: UCX_TLS, value: "rc,cuda_copy,cuda_ipc"}
+- {name: UCX_NET_DEVICES, value: "{{ .Values.fabric.ucxNetDevices }}"}
+- {name: UCX_IB_GID_INDEX, value: "{{ .Values.fabric.gidIndex }}"}
+- {name: UCX_IB_TRAFFIC_CLASS, value: "{{ .Values.fabric.trafficClass }}"}
+{{- end -}}

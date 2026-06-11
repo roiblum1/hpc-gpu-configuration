@@ -1,0 +1,11 @@
+apiVersion: v2
+name: gateway-tenancy
+description: >-
+  Phase 7 — Front door. OSSM3 (Istio-based Gateway API) + Kuadrant (RH Connectivity Link)
+  operators, the Gateway + HTTPRoutes (interactive + batch lanes by hostname), and tenancy
+  policy: AuthPolicy (API key -> tenant) + RateLimitPolicy (limit TOKENS, not requests).
+  The Gateway layer does identity/budgets/lane selection only — never endpoint picking.
+type: application
+version: 0.1.0
+appVersion: "4.20"
+keywords: [gateway-api, istio, kuadrant, authpolicy, ratelimit, ossm]

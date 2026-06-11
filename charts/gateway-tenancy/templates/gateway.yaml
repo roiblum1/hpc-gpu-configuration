@@ -1,0 +1,47 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name }}
+  namespace: {{ .Values.ingressNamespace }}
+spec:
+  gatewayClassName: {{ .Values.gateway.gatewayClassName }}
+  listeners:
+    - name: https-interactive
+      port: {{ .Values.gateway.port }}
+      protocol: HTTPS
+      hostname: "{{ .Values.gateway.hostnameInteractive }}"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ .Values.gateway.tls.certificateRef }}
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https-batch
+      port: {{ .Values.gateway.port }}
+      protocol: HTTPS
+      hostname: "{{ .Values.gateway.hostnameBatch }}"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ .Values.gateway.tls.certificateRef }}
+      allowedRoutes:
+        namespaces:
+          from: All
+{{- if and .Values.gateway.tls.certificate.enabled .Values.gateway.tls.certificate.issuer.name }}
+---
+# cert-manager Certificate -> populates the {{ .Values.gateway.tls.certificateRef }} secret.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.gateway.tls.certificateRef }}
+  namespace: {{ .Values.ingressNamespace }}
+spec:
+  secretName: {{ .Values.gateway.tls.certificateRef }}
+  dnsNames:
+    - "{{ .Values.gateway.hostnameInteractive }}"
+    - "{{ .Values.gateway.hostnameBatch }}"
+  issuerRef:
+    name: {{ .Values.gateway.tls.certificate.issuer.name }}
+    kind: {{ .Values.gateway.tls.certificate.issuer.kind }}
+{{- end }}

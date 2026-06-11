@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-staging-script
+  namespace: {{ .Release.Namespace }}
+data:
+  stage-weights.sh: |
+{{ tpl (.Files.Get "files/stage-weights.sh") . | indent 4 }}

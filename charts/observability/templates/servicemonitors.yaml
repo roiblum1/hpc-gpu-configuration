@@ -1,0 +1,31 @@
+{{- if .Values.serviceMonitors.dynamoFrontend.enabled }}
+# TTFT / ITL / throughput per lane & tenant + KV/prefix hit + KVBM offload/onboard + MTP acceptance.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dynamo-frontend
+  namespace: {{ .Values.serviceMonitors.dynamoFrontend.namespace }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml .Values.serviceMonitors.dynamoFrontend.matchLabels | nindent 6 }}
+  endpoints:
+    - port: {{ .Values.serviceMonitors.dynamoFrontend.port }}
+      interval: {{ .Values.serviceMonitors.dynamoFrontend.interval }}
+{{- end }}
+{{- if .Values.serviceMonitors.roceExporter.enabled }}
+---
+# Per-rail RoCE: throughput, out_of_buffer, CNPs, PFC pause duration.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: roce-rail-metrics
+  namespace: {{ .Values.serviceMonitors.roceExporter.namespace }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml .Values.serviceMonitors.roceExporter.matchLabels | nindent 6 }}
+  endpoints:
+    - port: {{ .Values.serviceMonitors.roceExporter.port }}
+      interval: {{ .Values.serviceMonitors.roceExporter.interval }}
+{{- end }}

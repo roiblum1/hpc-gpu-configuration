@@ -1,0 +1,23 @@
+# Phase 0 — model weight staging. Source: §0.
+# Mirror BOTH quantizations: FP8 (prefill/H200) and NVFP4 (decode/Blackwell).
+# Worker pods (glm51-dynamo) mount hostPath:{{ hostPath }} read-only.
+
+roleLabel: gpu-hpc
+hostPath: /var/lib/models          # dedicated 'models' LV, separate from the KV-cache LV (§0 / §4)
+
+# Image with skopeo (+ rsync) available, pulled from your mirror.
+image: <your-registry>/tools/skopeo:latest
+
+# Where staged weights come from. Stage once, reference by digest.
+source:
+  type: oci                        # oci | rsync
+  registry: <your-registry>/models # for type=oci: docker://<registry>/<ref>
+  rsyncBase: rsync://artifacts/models   # for type=rsync
+
+# Local dir name -> matches glm51-dynamo modelPaths (/models/<name>).
+models:
+  - {name: glm-5.1-fp8,   ref: "glm-5.1-fp8@sha256:REPLACE"}
+  - {name: glm-5.1-nvfp4, ref: "glm-5.1-nvfp4@sha256:REPLACE"}
+
+resources:
+  requests: {cpu: "2", memory: 4Gi}

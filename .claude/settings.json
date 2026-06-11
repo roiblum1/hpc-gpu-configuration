@@ -3,7 +3,9 @@
     "allow": [
       "Bash(rtk ls *)",
       "Bash(rtk find *)",
-      "Bash(rtk read *)"
+      "Bash(rtk read *)",
+      "Bash(cd /tmp *)",
+      "Read(//private/tmp/**)"
     ]
   }
 }

@@ -9,9 +9,7 @@ type: application
 version: 0.1.0
 appVersion: "0.x"
 keywords: [openshift, kai-scheduler, gang-scheduling, queues, runai]
-dependencies:
-  - name: kai-scheduler
-    version: "*"
-    # Mirror the upstream chart and point this at your registry, then set upstream.install=true.
-    repository: "oci://<your-mirror-registry>/charts"
-    condition: upstream.install
+# This chart ships ONLY our config (queues + priority classes) so it renders standalone.
+# The KAI engine is installed separately from its mirrored/cloned chart — see values.yaml
+# `upstream:` and README. To vendor it as a subchart instead, add a `dependencies:` stanza
+# pointing at your mirror, drop the chart into charts/, and run `helm dependency build`.

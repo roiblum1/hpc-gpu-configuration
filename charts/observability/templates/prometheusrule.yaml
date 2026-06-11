@@ -1,0 +1,69 @@
+{{- if .Values.alerts.enabled }}
+# §8 alert minimums. METRIC NAMES BELOW ARE PLACEHOLDERS — confirm against the actual
+# exporters (Dynamo/KVBM engine metrics, KAI metrics, topolvm metrics, your RoCE exporter)
+# and adjust before relying on these in production.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: glm51-serving-alerts
+  namespace: {{ .Values.namespace }}
+spec:
+  groups:
+    - name: glm51-fabric
+      rules:
+        - alert: RoCEPFCPauseStorm
+          # TODO: real metric, e.g. rate(node_roce_pfc_pause_duration_seconds_total[5m])
+          expr: rate(roce_pfc_pause_duration_seconds_total[5m]) > {{ .Values.alerts.pfcPauseSecondsPer5m }}
+          for: 2m
+          labels: {severity: critical}
+          annotations:
+            summary: "RoCE PFC pause storm on {{`{{ $labels.device }}`}}"
+            description: "Sustained PFC pause = fabric QoS drift (switch/NIC mismatch). Audit §10 DSCP/TC/PFC."
+    - name: glm51-serving
+      rules:
+        - alert: MTPAcceptanceCollapse
+          # TODO: real metric, e.g. dynamo_spec_decode_acceptance_rate
+          expr: mtp_acceptance_rate < {{ .Values.alerts.mtpAcceptanceMin }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "MTP acceptance below {{ .Values.alerts.mtpAcceptanceMin }}"
+            description: "Speculative decode is now pure overhead; consider disabling MTP for this traffic mix."
+        - alert: PrefixHitRateDrop
+          # TODO: real metric, e.g. dynamo_kv_prefix_hit_ratio
+          expr: kv_prefix_hit_ratio < {{ .Values.alerts.prefixHitRateMin }}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "KV prefix hit rate below {{ .Values.alerts.prefixHitRateMin }} (cache thrash)"
+            description: "Router/KVBM not reusing prefixes; every miss is GPU time spent re-prefilling."
+    - name: glm51-scheduling
+      rules:
+        - alert: InteractiveGangPending
+          # TODO: real metric, e.g. kai_podgroup_pending_seconds
+          expr: kai_gang_pending_seconds{queue="serving-interactive"} > {{ .Values.alerts.gangPendingSeconds }}
+          for: 1m
+          labels: {severity: critical}
+          annotations:
+            summary: "Interactive gang Pending > {{ .Values.alerts.gangPendingSeconds }}s"
+            description: "Capacity starvation in serving-interactive — reclaim not freeing GPUs fast enough."
+    - name: glm51-storage
+      rules:
+        - alert: KVCacheThinPoolNearFull
+          # TODO: real metric, e.g. topolvm_thinpool_data_percent
+          expr: topolvm_thinpool_data_percent{device_class="kvcache"} > {{ .Values.alerts.thinPoolPercent }}
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "kvcache thin pool > {{ .Values.alerts.thinPoolPercent }}% on {{`{{ $labels.node }}`}}"
+            description: "Thin pool exhaustion is a node-level incident — KVBM disk tier writes will fail."
+    - name: glm51-controlplane
+      rules:
+        - alert: DynamoControlPlaneDown
+          expr: up{job=~"etcd|nats"} == 0
+          for: 1m
+          labels: {severity: critical}
+          annotations:
+            summary: "Dynamo control plane member down ({{`{{ $labels.job }}`}})"
+            description: "etcd/NATS is the discovery + KVBM event plane — routing degrades without it."
+{{- end }}

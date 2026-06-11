@@ -1,0 +1,17 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ .Values.priorityClasses.interactive.name }}
+value: {{ .Values.priorityClasses.interactive.value }}
+preemptionPolicy: PreemptLowerPriority
+globalDefault: false
+description: "Interactive serving gangs — reclaims batch on demand."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ .Values.priorityClasses.batch.name }}
+value: {{ .Values.priorityClasses.batch.value }}
+preemptionPolicy: Never
+globalDefault: false
+description: "Preemptible batch lane — scavenges idle GPUs, evicted whole when interactive scales up."

@@ -1,0 +1,45 @@
+{{- if .Values.tenancy.rateLimit.enabled }}
+# Per-tenant budgets, keyed on the tenant identity from AuthPolicy. Limit TOKENS not requests.
+# tokenAware=true uses a token counter (descriptor emitted by the frontend); if your RHCL
+# version lacks it, set tokenAware=false and cap max_tokens at the frontend instead (§7).
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: {{ .Values.routes.interactive.name }}-budget
+  namespace: {{ .Values.servingNamespace }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ .Values.routes.interactive.name }}
+  limits:
+    per-tenant:
+      rates:
+        - limit: {{ .Values.tenancy.rateLimit.interactiveTokensPerMin }}
+          window: 60s
+      counters:
+        - expression: auth.identity.tenant
+      {{- if .Values.tenancy.rateLimit.tokenAware }}
+      # token-aware: cost comes from the usage descriptor the frontend reports
+      when:
+        - predicate: "request.path.startsWith('/v1')"
+      {{- end }}
+---
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: {{ .Values.routes.batch.name }}-budget
+  namespace: {{ .Values.servingNamespace }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ .Values.routes.batch.name }}
+  limits:
+    per-tenant:
+      rates:
+        - limit: {{ .Values.tenancy.rateLimit.batchTokensPerMin }}
+          window: 60s
+      counters:
+        - expression: auth.identity.tenant
+{{- end }}

@@ -1,0 +1,89 @@
+# Phase 6 — GLM-5.1 on Dynamo. Source: §6 / §10.
+# Heterogeneity is a feature: prefill = H200/FP8/TP8, decode = Blackwell/NVFP4/wide-EP.
+
+namespace: glm-serving
+maxModelLen: 202752         # ~202K context
+mtu: 9000
+
+# Staged weights (Phase 0). Both quantizations live on local NVMe, mounted read-only.
+modelPaths:
+  fp8: /models/glm-5.1-fp8        # prefill (H200)
+  nvfp4: /models/glm-5.1-nvfp4    # decode (Blackwell)
+modelsHostPath: /var/lib/models   # node path staged by the model-staging chart
+
+# Rails consumed by every worker pod (full-node pattern).
+rails: [rail0, rail1, rail2, rail3, rail4, rail5, rail6, rail7]
+
+# Collective/transfer env (§3.4). gidIndex + trafficClass MUST match node-foundation
+# (host QoS) and sriov-rails, or NCCL/UCX silently ride the lossy queue. §10
+fabric:
+  gidIndex: 3
+  trafficClass: 106
+  ncclHca: mlx5
+  ucxNetDevices: "mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1"
+
+# Scheduling identity — one quota brain (KAI). §5 / §10
+scheduler: kai-scheduler
+queues:
+  interactive: serving-interactive
+  batch: serving-batch
+priorityClasses:
+  interactive: serving-critical
+  batch: serving-batch
+
+# Per-SKU node labels. b300 is a SEPARATE decode release — never mix B200/B300 in one EP group. §6.2
+sku:
+  prefill: h200
+  decode: b200
+
+# Dynamo platform (operator + etcd + NATS). Pin etcd/NATS to infra nodes (chart values),
+# never GPU nodes. Off by default — mirror the chart / git clone into ./charts for disconnected.
+upstream:
+  install: false
+
+frontend:
+  replicas: 4                 # CPU pods on infra nodes; OpenAI-compatible API + tokenizer + router
+  routerMode: kv              # KV/prefix-aware routing — THE inference router. §7: do not add a 2nd one
+  infraNodeLabel: node-role.kubernetes.io/infra
+  port: 8000
+  resources:
+    cpu: "16"
+    memory: 64Gi
+
+prefill:
+  replicas: 4                 # 4 x (1 node TP8) to start; planner adjusts
+  nodeCount: 1
+  tensorParallel: 8
+  kvCacheDtype: fp8
+  connector: kvbm             # KVBM anchored on prefill (decode keeps CUDA graphs). §6.3
+  kvbm:
+    cpuCacheGb: 1024          # pinned DRAM tier. ORDERING: GPU-KV <= cpuCacheGb <= diskCacheGb. §10
+    diskCacheGb: 2048         # on the LVMS kvcache PVC
+    initTimeoutSecs: 1200     # pinning ~1TB takes minutes
+  resources:
+    gpu: 8
+    cpu: "96"                 # integer -> Guaranteed QoS -> exclusive pcpus
+    memory: 1800Gi            # >= cpuCacheGb + runtime + tokenizer headroom
+  diskPvc:
+    storageClass: kvcache     # from lvms-storage
+    size: 2200Gi              # >= diskCacheGb
+
+decode:
+  replicas: 2                 # 2 EP16 groups = 4 Blackwell nodes
+  nodeCount: 2                # Grove gang: 2 nodes/replica — KAI schedules atomically. §5
+  tensorParallel: 1
+  dataParallel: 16            # DP attention; EP = DP x TP = 16
+  kvCacheDtype: fp8
+  speculativeTokens: 1        # one MTP head — interactive lane only. §6.4
+  resources:
+    gpu: 8
+    cpu: "96"
+    memory: 1200Gi
+
+# Batch lane = a second, smaller DGD: queue serving-batch, preemptible, MTP off, aggressive batch.
+# Same model + same weights LV; only scheduling identity and engine tuning differ. §6.4
+batchLane:
+  enabled: true
+  frontendReplicas: 1
+  prefillReplicas: 1
+  decodeReplicas: 1

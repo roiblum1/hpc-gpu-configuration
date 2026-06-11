@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: model-staging
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: model-staging
+spec:
+  selector:
+    matchLabels:
+      app: model-staging
+  template:
+    metadata:
+      labels:
+        app: model-staging
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/{{ .Values.roleLabel }}: ""
+      tolerations:
+        - key: node-role.kubernetes.io/{{ .Values.roleLabel }}
+          operator: Exists
+      containers:
+        - name: stage
+          image: {{ .Values.image }}
+          command: ["/bin/bash", "/opt/stage/stage-weights.sh"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: script, mountPath: /opt/stage}
+            - {name: models, mountPath: {{ .Values.hostPath }}}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "test -f {{ .Values.hostPath }}/{{ (index .Values.models 0).name }}/.staged"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: script
+          configMap:
+            name: model-staging-script
+            defaultMode: 0755
+        - name: models
+          hostPath:
+            path: {{ .Values.hostPath }}
+            type: DirectoryOrCreate
