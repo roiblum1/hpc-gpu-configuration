@@ -41,10 +41,14 @@ numVfs: 1
 # node uses to reach the OTHER nodes' same-rail endpoints (same value from every node).
 #
 # YOUR 2-LEAF FABRIC: rails 0-3 -> leaf1, rails 4-7 -> leaf2 (matches the CPU socket split).
-# Per-rail /24 keeps each VF's routing deterministic (no ECMP across rails); grouping the /24s
-# under one /22 per leaf lets the switch advertise a single summary per leaf:
-#   leaf1 supernet 192.168.110.0/22  (rail0 .110 / rail1 .111 / rail2 .112 / rail3 .113)   §10
-#   leaf2 supernet 192.168.114.0/22  (rail4 .114 / rail5 .115 / rail6 .116 / rail7 .117)   §10
+# Per-rail /24 keeps each VF's routing deterministic (no ECMP across rails). If the switch
+# summarizes per leaf, VERIFY THE PREFIX MATH — these .110-.117 /24s do NOT fold into one /22 per
+# leaf (192.168.110.0/22 canonicalizes to .108.0/22 = covers .108-.111, dropping rail2/rail3). With
+# THIS numbering each leaf is two /23s (NOT one /22):                                         §10
+#   leaf1  192.168.110.0/23 + 192.168.112.0/23   (rail0 .110 / rail1 .111 / rail2 .112 / rail3 .113)
+#   leaf2  192.168.114.0/23 + 192.168.116.0/23   (rail4 .114 / rail5 .115 / rail6 .116 / rail7 .117)
+# Want ONE /22 per leaf instead? renumber to /22-aligned /24s (leaf1 .108-.111, leaf2 .112-.115) and
+# carve the /31s from those. Either way the route `dst` stays the per-rail /24 — never the summary.
 rails:
   - {name: rail0, pf: ens1f0np0, socket: 0, leaf: leaf1, block: "192.168.110.0/24"}
   - {name: rail1, pf: ens1f1np0, socket: 0, leaf: leaf1, block: "192.168.111.0/24"}

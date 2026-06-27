@@ -90,22 +90,31 @@ routing is needed for the collective; cross-rail data uses NVLink + PXN inside t
 topology is healthy as-is.
 
 We still respect "two leaves" — in the **numbering**, not the routing granularity. The 8 per-rail
-`/24` blocks are allocated so rails 0–3 fall under a **leaf1 /22** and 4–7 under a **leaf2 /22**:
+`/24` blocks are grouped so rails 0–3 sit on leaf1 and 4–7 on leaf2:
 
-| rail | leaf | per-rail block (the pod's route `dst`) | leaf aggregate (BGP summary) |
+| rail | leaf | per-rail block (the pod's route `dst`) | leaf summary (BGP) |
 |---|---|---|---|
-| rail0 | leaf1 | `192.168.110.0/24` | `192.168.110.0/22` |
-| rail1 | leaf1 | `192.168.111.0/24` | (rail0–3) |
+| rail0 | leaf1 | `192.168.110.0/24` | `192.168.110.0/23` + `192.168.112.0/23` |
+| rail1 | leaf1 | `192.168.111.0/24` | (rail0–3 = two /23s) |
 | rail2 | leaf1 | `192.168.112.0/24` | |
 | rail3 | leaf1 | `192.168.113.0/24` | |
-| rail4 | leaf2 | `192.168.114.0/24` | `192.168.114.0/22` |
-| rail5 | leaf2 | `192.168.115.0/24` | (rail4–7) |
+| rail4 | leaf2 | `192.168.114.0/24` | `192.168.114.0/23` + `192.168.116.0/23` |
+| rail5 | leaf2 | `192.168.115.0/24` | (rail4–7 = two /23s) |
 | rail6 | leaf2 | `192.168.116.0/24` | |
 | rail7 | leaf2 | `192.168.117.0/24` | |
 
-In-pod: 8 per-rail routes → deterministic. On the fabric: one summarized /22 per leaf → clean BGP,
-and it mirrors the "two leaves" mental model. Address layout and routing granularity are different
-axes; they don't conflict.
+> **Prefix-math warning (a reviewer caught this).** `.110–.117` does **NOT** fold into one /22 per
+> leaf. `192.168.110.0/22` canonicalizes to `192.168.108.0/22` (covers `.108–.111`) — it would
+> **drop rail2/rail3** — and `192.168.114.0/22` → `192.168.112.0/22` drops rail6/rail7. With this
+> numbering each leaf is **two /23s** (above). If a fabric engineer trusts a wrong `/22` and does
+> `aggregate-address … summary-only`, the excluded rails get blackholed — a RoCE-looking failure
+> that's really a BGP-aggregation bug. Want a single `/22` per leaf? **renumber** to /22-aligned
+> /24s (leaf1 `.108–.111`, leaf2 `.112–.115`) and carve the /31s from those.
+
+In-pod: 8 per-rail routes → deterministic. On the fabric: summarize per leaf (two /23s as numbered,
+or one /22 if renumbered) — or just advertise the eight /24s; at this node count it's free. The route
+`dst` is **always** the per-rail /24, never the summary. Address layout and routing granularity are
+different axes; they don't conflict.
 
 ## 8. Why there are N × 8 SriovNetwork objects (per-node NADs)
 
@@ -175,7 +184,28 @@ Rendered IPAM (e.g. `rail0-node0` / `rail0-node1`), matching the hand-written ta
   path-specific ACS disable — on XE9680 you may need a boot-time `setpci` to clear OS-visible ACS);
   PCIe relaxed ordering on; `nvidia-peermem`/DMA-BUF loaded.
 
-## 11. Validation (Gate 3)
+## 11. Deliberate non-goals / FAQ
+
+**Q: Add a broad `/16` (or default) catch-all so a GPU can reach GPUs on *other* rails?**
+No. The full-node pod already holds **all 8 per-rail /24 routes** (one per NAD), so every rail's
+subnet is already reachable — each via its own correct NIC. And cross-rail GPU traffic doesn't ride
+an IP route at all: NCCL with `NCCL_CROSS_NIC=0` moves it over **NVLink + PXN** (GPU0→GPU3 *inside*
+the node via NVLink, then the inter-node hop stays same-rail). A `/16` via every rail's gw would put
+**8 equal routes** for everything-not-in-a-/24 into the one pod table → **8-way ECMP**, the exact
+failure §6 removes, for **zero benefit** (real endpoints are all inside the /24s). If a GPU genuinely
+can't reach a peer, PXN isn't engaging — fix that (`NCCL_DEBUG=INFO`, `nvidia-smi topo -m`), don't
+add a /16.
+
+**Keep rail-to-rail BGP-routable on the fabric.** Do *not* "enforce" rail isolation by filtering
+rail-to-rail on the leaves. Isolation is achieved by the **per-rail routes inside the pod** (§6), not
+by breaking fabric reachability — PXN's same-rail hops and any control traffic still need the fabric
+to forward normally. Blocking it on the switch just creates blackholes.
+
+**Per-VF source/policy routing is a deliberate non-goal.** For the genuine cross-NIC corner case we
+rely on PXN, *not* fragile per-VF `ip rule` source-based routing inside the pod. If you ever think you
+need it, treat it as a signal that PXN/topology detection is broken, not as the fix.
+
+## 12. Validation (Gate 3)
 
 1. In a pod, `ip route` shows **exactly one** route per rail (no duplicate dst via multiple NICs).
 2. `show_gids` / `ibv_devinfo -v` inside the pod: index 3 = RoCEv2 IPv4.

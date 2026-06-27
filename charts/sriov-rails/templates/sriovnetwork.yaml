@@ -25,7 +25,6 @@ spec:
   {{- $ipam := dict "type" "static" "addresses" (list $addr) "routes" (list $route) }}
   ipam: |
     {{ $ipam | toJson }}
-  metaPlugins: ""
 {{- end }}
 {{- end }}
 {{- end }}
