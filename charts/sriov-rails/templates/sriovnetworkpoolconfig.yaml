@@ -1,0 +1,20 @@
+{{- /*
+SriovNetworkPoolConfig — sets the host RDMA subsystem to `exclusive` on the rail nodes, so each pod
+gets its own isolated RDMA device + GID table in its netns (vs `shared`). Required for correct
+per-rail GID/identity with 8 VFs in one full-node pod. Applying this reconfigures the RDMA netns
+mode on the selected nodes (reboot via the MCP). See ROUTING.md / research finding #4.
+*/}}
+{{- with .Values.rdma }}
+{{- if .mode }}
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovNetworkPoolConfig
+metadata:
+  name: {{ $.Values.roleLabel }}-rail-pool
+  namespace: {{ $.Values.operator.namespace }}
+spec:
+  rdmaMode: {{ .mode }}
+  nodeSelector:
+    matchLabels:
+      node-role.kubernetes.io/{{ $.Values.roleLabel }}: ""
+{{- end }}
+{{- end }}

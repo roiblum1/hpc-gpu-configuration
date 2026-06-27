@@ -289,7 +289,7 @@ spec:
   nodeSelector:
     node-role.kubernetes.io/gpu-hpc: ""
   priority: 90
-  numVfs: 2                            # serving needs 1 VF/rail/pod; 2nd VF = headroom for debug/validation pods
+  numVfs: 1                            # whole-GPU pods, no MIG, full-node pod → exactly 1 VF/rail/pod (no spare)
   nicSelector:
     pfNames: ["ens1f0np0"]             # the physical PF cabled as rail 0 — per-SKU naming, keep a rail map doc
   deviceType: netdevice                # NOT vfio — kernel netdev + RDMA
@@ -314,11 +314,16 @@ spec:
   trust: "on"                  # several RoCE-on-VF recipes need VF trust for DSCP/QoS egress — verify at Gate 3
   spoofChk: "off"
   ipam: |
-    {"type": "whereabouts", "range": "172.16.0.0/24"}   # one /24 per rail, mirrors the fabric's per-rail subnets
+    {"type": "whereabouts", "range": "172.16.0.0/24",
+     "gateway": "172.16.0.1", "routes": [{"dst": "172.16.0.0/16"}]}
   metaPlugins: ""
 ```
 
-Whereabouts allocations leak when nodes die ungracefully (gang evictions, drains): verify your CNI version runs the whereabouts ip-reconciler cron, or stale IPs in a rail /24 will eventually block reschedules.
+**Routed (BGP), port-to-port fabric — not L2.** Each rail is a routed point-to-point link from the NIC to its switch port; there is **no shared L2 broadcast domain per rail**, so the NAD carries a `gateway` (the rail's switch port) and `routes` to the same rail's fabric-wide aggregate — keeping cross-node RDMA rail-aligned (`NCCL_CROSS_NIC=0`). BGP/ECMP in the fabric (and host-side FRR if you advertise endpoints from the host) provides inter-node reachability — that lives switch/host-side, not in these CRs. If the fabric is **BGP-unnumbered** (link-local next hops), omit `gateway` and use on-link `routes` (`dst` only): the per-node next hop drops out and one NAD works unchanged on every node.
+
+**How many of these does the cluster need?** Exactly **one `SriovNetworkNodePolicy` + one `SriovNetwork` per rail — 8 + 8 total, for the whole cluster, independent of node count.** The pool is keyed by `resourceName`, not by node: a single `rail0` policy with the `gpu-hpc` nodeSelector creates VFs on rail 0 of *every* matching node, and the one `rail0` NAD is what every pod attaches. Do **not** create per-node objects (`roce-<node>-ens..`) — pods request their networks before placement, so a node-specific NAD name can never be selected, and you would carry N×8 objects instead of 8. If PF naming differs across hardware generations, add one extra policy per generation **reusing the same `resourceName`** (the operator merges them into one pool) so pods always reference `rail0..rail7`; still one `SriovNetwork` per rail.
+
+Whereabouts allocations leak when nodes die ungracefully (gang evictions, drains): verify your CNI version runs the whereabouts ip-reconciler cron, or stale IPs in a rail range will eventually block reschedules.
 
 ### 3.3 How worker pods consume the rails (full-node pod pattern)
 
@@ -653,6 +658,7 @@ Each row is one value that multiple layers must agree on. When something is "mys
 | **MTU 9000** | NIC PF (Phase 1.4) · `SriovNetworkNodePolicy.mtu` · switch fabric · pod NADs |
 | **DSCP 26 / TC 106 / GID index 3 (RoCEv2)** | `mlnx_qos`/tc files (1.4) · switch PFC/ECN config · `NCCL_IB_TC`+`NCCL_IB_GID_INDEX` · `UCX_IB_TRAFFIC_CLASS`+`UCX_IB_GID_INDEX` · CNP DSCP 48/prio 6 (`roce_np` ↔ switch CNP queue) |
 | **Rail map (GPU n ↔ NIC n ↔ socket)** | physical cabling doc · `pfNames` per rail policy · `NCCL_CROSS_NIC=0` assumption · `nvidia-smi topo -m` evidence |
+| **Routed (BGP) RoCE, one pool per rail** | 8 `SriovNetworkNodePolicy` + 8 `SriovNetwork` total (keyed by `resourceName`, span all nodes via nodeSelector) · port-to-port L3, no shared L2 per rail · `SriovNetwork` `gateway`+`routes` (or on-link `routes` for BGP-unnumbered) · switch/host BGP/ECMP for inter-node reachability · **never per-node NADs** |
 | **Full-node pod granularity** | `topologyPolicy: best-effort` · pod requests = 8 GPU + 8 VFs + integer CPUs · runtime-internal NUMA pinning |
 | **Low-latency pod contract** | NTO-generated `runtimeClassName: performance-gpu-hpc` · `irq-load-balancing.crio.io`/`cpu-quota.crio.io` disable annotations (3.3/6.4) · `globallyDisableIrqLoadBalancing: false` relies on this per-pod opt-out |
 | **Reserved CPUs (0-7,56-63)** | PerformanceProfile · IRQ affinity (managed_irq) · *nothing else* scheduled there — frontends live on infra nodes, aux pods float on the isolated shared pool |

@@ -1,4 +1,5 @@
-# Phase 3 — SR-IOV RoCE rails. Source: §3 / §10.
+# Phase 3 — SR-IOV RoCE rails. Source: §3 / §10. Full design rationale: ROUTING.md (read it
+# before changing the addressing — it explains the rail/ECMP/per-node-NAD reasoning).
 
 roleLabel: gpu-hpc          # node selector — must match node-foundation. §10
 servingNamespace: glm-serving   # where the SriovNetwork (NAD) is published
@@ -9,6 +10,12 @@ mtu: 9000                   # §10 invariant — must match host PF + switch + p
 vf:
   trust: "on"
   spoofChk: "off"
+
+# RDMA subsystem mode for the SR-IOV pool (SriovNetworkPoolConfig). `exclusive` gives each pod its
+# own isolated RDMA device + GID table in its netns — required so per-rail GID/identity stays clean
+# with 8 VFs in one full-node pod. The research's highest-priority correctness item. §10
+rdma:
+  mode: exclusive
 
 operator:
   enabled: true
@@ -21,16 +28,61 @@ operator:
     sourceNamespace: openshift-marketplace
     installPlanApproval: Automatic
 
-# Per rail: VFs reported to kubelet as openshift.io/<name>; serving uses 1 VF/rail/pod,
-# 2nd VF is debug/validation headroom. pfName is per-SKU — keep a rail-map doc and verify
-# the socket with: cat /sys/class/net/<pf>/device/numa_node. Rails 0-3 socket0, 4-7 socket1.
-numVfs: 2
+# numVfs = 1: every GPU pod takes a WHOLE GPU (no MIG) and pods are full-node, so there is
+# exactly one VF per rail per pod and no spare is needed.
+numVfs: 1
+
+# ============================================================================================
+# Per-rail HARDWARE + remote block  ->  drives the 8 SriovNetworkNodePolicy (one per rail)
+# ============================================================================================
+# pf/socket/leaf are identical on every (identical) node, so ONE policy per rail creates that
+# rail's VF pool (openshift.io/<rail>) on ALL nodes. `block` = this rail's cluster-wide remote
+# prefix: the /24 that aggregates this rail's /31 link on every node, and the route `dst` every
+# node uses to reach the OTHER nodes' same-rail endpoints (same value from every node).
+#
+# YOUR 2-LEAF FABRIC: rails 0-3 -> leaf1, rails 4-7 -> leaf2 (matches the CPU socket split).
+# Per-rail /24 keeps each VF's routing deterministic (no ECMP across rails); grouping the /24s
+# under one /22 per leaf lets the switch advertise a single summary per leaf:
+#   leaf1 supernet 192.168.110.0/22  (rail0 .110 / rail1 .111 / rail2 .112 / rail3 .113)   §10
+#   leaf2 supernet 192.168.114.0/22  (rail4 .114 / rail5 .115 / rail6 .116 / rail7 .117)   §10
 rails:
-  - {name: rail0, pf: ens1f0np0, socket: 0, subnet: "172.16.0.0/24"}
-  - {name: rail1, pf: ens1f1np0, socket: 0, subnet: "172.16.1.0/24"}
-  - {name: rail2, pf: ens2f0np0, socket: 0, subnet: "172.16.2.0/24"}
-  - {name: rail3, pf: ens2f1np0, socket: 0, subnet: "172.16.3.0/24"}
-  - {name: rail4, pf: ens3f0np0, socket: 1, subnet: "172.16.4.0/24"}
-  - {name: rail5, pf: ens3f1np0, socket: 1, subnet: "172.16.5.0/24"}
-  - {name: rail6, pf: ens4f0np0, socket: 1, subnet: "172.16.6.0/24"}
-  - {name: rail7, pf: ens4f1np0, socket: 1, subnet: "172.16.7.0/24"}
+  - {name: rail0, pf: ens1f0np0, socket: 0, leaf: leaf1, block: "192.168.110.0/24"}
+  - {name: rail1, pf: ens1f1np0, socket: 0, leaf: leaf1, block: "192.168.111.0/24"}
+  - {name: rail2, pf: ens2f0np0, socket: 0, leaf: leaf1, block: "192.168.112.0/24"}
+  - {name: rail3, pf: ens2f1np0, socket: 0, leaf: leaf1, block: "192.168.113.0/24"}
+  - {name: rail4, pf: ens3f0np0, socket: 1, leaf: leaf2, block: "192.168.114.0/24"}
+  - {name: rail5, pf: ens3f1np0, socket: 1, leaf: leaf2, block: "192.168.115.0/24"}
+  - {name: rail6, pf: ens4f0np0, socket: 1, leaf: leaf2, block: "192.168.116.0/24"}
+  - {name: rail7, pf: ens4f1np0, socket: 1, leaf: leaf2, block: "192.168.117.0/24"}
+
+# ============================================================================================
+# Per-node /31 ENDPOINTS  ->  drives the N x 8 SriovNetwork NADs (one per node-link)
+# ============================================================================================
+# WHY per node: each node's rail link is a unique /31 with a unique gw (the leaf port it is cabled
+# to). A SriovNetwork (NAD) holds a fixed static address, so it cannot represent a different /31 per
+# node -> you need ONE NAD per node-link, named <rail>-<node> (rail0-node0, rail0-node1, ...). All
+# <rail>-nodeN share resourceName=<rail> (same VF pool); the pod on node N MUST attach THAT node's
+# NADs (rail*-nodeN). Per rail: host = the /31 host end (the VF address); gw = the /31 peer (leaf
+# port). Route dst = that rail's `block` above. Add ONE entry per node. Addresses are ILLUSTRATIVE
+# (node n VF = .(2n+1), gw = .(2n)); set them from your fabric plan.
+nodes:
+  - name: node0
+    rails:
+      rail0: {host: "192.168.110.1/31", gw: "192.168.110.0"}
+      rail1: {host: "192.168.111.1/31", gw: "192.168.111.0"}
+      rail2: {host: "192.168.112.1/31", gw: "192.168.112.0"}
+      rail3: {host: "192.168.113.1/31", gw: "192.168.113.0"}
+      rail4: {host: "192.168.114.1/31", gw: "192.168.114.0"}
+      rail5: {host: "192.168.115.1/31", gw: "192.168.115.0"}
+      rail6: {host: "192.168.116.1/31", gw: "192.168.116.0"}
+      rail7: {host: "192.168.117.1/31", gw: "192.168.117.0"}
+  - name: node1
+    rails:
+      rail0: {host: "192.168.110.3/31", gw: "192.168.110.2"}
+      rail1: {host: "192.168.111.3/31", gw: "192.168.111.2"}
+      rail2: {host: "192.168.112.3/31", gw: "192.168.112.2"}
+      rail3: {host: "192.168.113.3/31", gw: "192.168.113.2"}
+      rail4: {host: "192.168.114.3/31", gw: "192.168.114.2"}
+      rail5: {host: "192.168.115.3/31", gw: "192.168.115.2"}
+      rail6: {host: "192.168.116.3/31", gw: "192.168.116.2"}
+      rail7: {host: "192.168.117.3/31", gw: "192.168.117.2"}

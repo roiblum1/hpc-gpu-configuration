@@ -1,16 +1,31 @@
-{{- range $r := .Values.rails }}
+{{- /*
+One SriovNetwork (NAD) per node-link: rails x nodes. Each node's rail link is a unique /31 with a
+unique gw, so the static address differs per node -> one NAD per <rail>-<node>. All <rail>-nodeN
+share resourceName=<rail> (one VF pool); the route dst is the rail's cluster-wide /24 `block`
+reached via this node's /31 peer `gw`. See ROUTING.md for why this is per-node and per-rail.
+*/}}
+{{- range $rail := .Values.rails }}
+{{- range $node := $.Values.nodes }}
+{{- $link := index $node.rails $rail.name }}
+{{- if $link }}
 ---
 apiVersion: sriovnetwork.openshift.io/v1
 kind: SriovNetwork
 metadata:
-  name: {{ $r.name }}
+  name: {{ $rail.name }}-{{ $node.name }}
   namespace: {{ $.Values.operator.namespace }}
 spec:
-  resourceName: {{ $r.name }}
+  resourceName: {{ $rail.name }}             # -> openshift.io/{{ $rail.name }} (shared VF pool)
   networkNamespace: {{ $.Values.servingNamespace }}
   trust: "{{ $.Values.vf.trust }}"
   spoofChk: "{{ $.Values.vf.spoofChk }}"
+  # Static /31 on the VF; routed to this rail's cluster-wide block via the /31 peer (leaf port).
+  {{- $addr := dict "address" $link.host }}
+  {{- $route := dict "dst" $rail.block "gw" $link.gw }}
+  {{- $ipam := dict "type" "static" "addresses" (list $addr) "routes" (list $route) }}
   ipam: |
-    {"type": "whereabouts", "range": "{{ $r.subnet }}"}
+    {{ $ipam | toJson }}
   metaPlugins: ""
+{{- end }}
+{{- end }}
 {{- end }}
