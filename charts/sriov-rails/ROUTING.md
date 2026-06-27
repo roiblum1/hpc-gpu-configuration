@@ -15,6 +15,39 @@ design that otherwise looks like "why are there 24 of these?".
   on one end, the leaf switch port on the other. The fabric is **routed (BGP)**, not L2.
 - **Two leaf switches:** NICs 0–3 of every server → **leaf1**; NICs 4–7 → **leaf2**. This lines up
   with the CPU socket split (rails 0–3 = socket 0, rails 4–7 = socket 1).
+- **Two spines** tie the leaves together (redundancy + scale-out). Rail-aligned traffic never
+  needs them (see §7) — they carry cross-leaf and future leaf-to-leaf growth.
+
+### Topology (2 spine / 2 leaf / 2 server × 8 GPU)
+
+```
+                       ┌──────────┐        ┌──────────┐
+   SPINE               │  spine1  │        │  spine2  │     ties the leaves together;
+   (redundancy,        └──┬────┬──┘        └──┬────┬──┘     redundancy + scale-out.
+    scale-out;           │    └────────┐  ┌──┘    │        Every leaf uplinks to BOTH
+    off the hot path)    │      ┌──────┼──┘       │        spines. Rail-aligned NCCL
+                         │      │      └───────┐  │        never rides the spine.
+                       ┌─┴──────┴─┐        ┌───┴──┴───┐
+   LEAF  (L3 / BGP)    │  leaf1   │        │  leaf2   │     leaf1 owns rails 0–3,
+                       │ rails    │        │ rails    │     leaf2 owns rails 4–7.
+                       │  0–3     │        │  4–7     │
+                       └──┬────┬──┘        └──┬────┬──┘
+                          │    │  8 × /31      │    │       one /31 port-to-port link
+                          │    │  per server   │    │       per NIC (NICn ── leaf port)
+   ───────────────────────┼────┼──────────────┼────┼──────────────────────────────────
+   ┌──────────────────────┴────┴──────────────┴────┴───────────────────────────────┐
+   │ SERVER  (node0; node1 identical)                  2 sockets · 8 GPU · 8 NIC     │
+   │                                                                                 │
+   │      socket 0  ──▶ leaf1                  socket 1  ──▶ leaf2                    │
+   │      GPU0  GPU1  GPU2  GPU3               GPU4  GPU5  GPU6  GPU7                 │
+   │       │     │     │     │                  │     │     │     │                   │
+   │      NIC0  NIC1  NIC2  NIC3               NIC4  NIC5  NIC6  NIC7                 │
+   │      rail0 rail1 rail2 rail3              rail4 rail5 rail6 rail7                │
+   │       └──────── NVLink mesh: all 8 GPUs talk in-node, full speed ───────┘       │
+   └─────────────────────────────────────────────────────────────────────────────────┘
+
+   node0.NIC0 and node1.NIC0 BOTH land on leaf1  →  rail0 ↔ rail0 stays on one leaf.
+```
 
 ## 2. What the software wants — "rail discipline"
 
@@ -103,18 +136,59 @@ We still respect "two leaves" — in the **numbering**, not the routing granular
 | rail6 | leaf2 | `192.168.116.0/24` | |
 | rail7 | leaf2 | `192.168.117.0/24` | |
 
-> **Prefix-math warning (a reviewer caught this).** `.110–.117` does **NOT** fold into one /22 per
-> leaf. `192.168.110.0/22` canonicalizes to `192.168.108.0/22` (covers `.108–.111`) — it would
-> **drop rail2/rail3** — and `192.168.114.0/22` → `192.168.112.0/22` drops rail6/rail7. With this
-> numbering each leaf is **two /23s** (above). If a fabric engineer trusts a wrong `/22` and does
-> `aggregate-address … summary-only`, the excluded rails get blackholed — a RoCE-looking failure
-> that's really a BGP-aggregation bug. Want a single `/22` per leaf? **renumber** to /22-aligned
-> /24s (leaf1 `.108–.111`, leaf2 `.112–.115`) and carve the /31s from those.
+### Why two /23s, not one /22 (subnetting in one rule)
+
+A prefix can only summarize /24s that sit on **its own power-of-two boundary**:
+
+```
+/24 = 1 × /24
+/23 = 2 × /24  — the pair must START ON AN EVEN third octet:  .110+.111, .112+.113, ...
+/22 = 4 × /24  — the four must START ON A MULTIPLE OF 4:       .108-.111, .112-.115, ...
+```
+
+leaf1 owns `.110 .111 .112 .113` = two even-aligned pairs = `192.168.110.0/23` + `192.168.112.0/23`.
+It can't be a single /22: the nearest /22 boundaries are `.108-.111` and `.112-.115`, so a written
+`192.168.110.0/22` actually means `.108-.111` — it would **drop rail2 (.112) and rail3 (.113)**.
+leaf2 (`.114-.117`) is the same story → two /23s. To collapse a leaf into **one** /22, renumber its
+four /24s to a multiple-of-4 start (leaf1 `.108-.111`, leaf2 `.112-.115`).
+
+> ⚠️ The danger is silent: trust a wrong `/22` and do `aggregate-address … summary-only` on the leaf
+> and the dropped rails get **blackholed** — looks like a RoCE failure, is really a BGP summary bug.
 
 In-pod: 8 per-rail routes → deterministic. On the fabric: summarize per leaf (two /23s as numbered,
-or one /22 if renumbered) — or just advertise the eight /24s; at this node count it's free. The route
+one /22 if renumbered) or just advertise the eight /24s — at this node count it's free. The route
 `dst` is **always** the per-rail /24, never the summary. Address layout and routing granularity are
 different axes; they don't conflict.
+
+### Full address plan (node × rail) — illustrative
+
+This is what the chart renders from `values.yaml` (verified against `helm template`). Read it as: the
+**VF IP** and **GW** are unique **per node-link**; the route **`dst` is the same per rail** from every
+node (it is that rail's whole /24). The NAD object is named `rail<N>-node<M>`. Pattern here: node *M*'s
+VF = `.(2M+1)`, GW = `.(2M)` (node0 → `.1`/`.0`, node1 → `.3`/`.2`, node2 → `.5`/`.4`, …).
+
+| Node | Rail (GPU) | Leaf | VF IP (`/31`) | GW (leaf port) | Route `dst` |
+|---|---|---|---|---|---|
+| node0 | rail0 (GPU0) | leaf1 | `192.168.110.1/31` | `192.168.110.0` | `192.168.110.0/24` |
+| node0 | rail1 (GPU1) | leaf1 | `192.168.111.1/31` | `192.168.111.0` | `192.168.111.0/24` |
+| node0 | rail2 (GPU2) | leaf1 | `192.168.112.1/31` | `192.168.112.0` | `192.168.112.0/24` |
+| node0 | rail3 (GPU3) | leaf1 | `192.168.113.1/31` | `192.168.113.0` | `192.168.113.0/24` |
+| node0 | rail4 (GPU4) | leaf2 | `192.168.114.1/31` | `192.168.114.0` | `192.168.114.0/24` |
+| node0 | rail5 (GPU5) | leaf2 | `192.168.115.1/31` | `192.168.115.0` | `192.168.115.0/24` |
+| node0 | rail6 (GPU6) | leaf2 | `192.168.116.1/31` | `192.168.116.0` | `192.168.116.0/24` |
+| node0 | rail7 (GPU7) | leaf2 | `192.168.117.1/31` | `192.168.117.0` | `192.168.117.0/24` |
+| node1 | rail0 (GPU0) | leaf1 | `192.168.110.3/31` | `192.168.110.2` | `192.168.110.0/24` |
+| node1 | rail1 (GPU1) | leaf1 | `192.168.111.3/31` | `192.168.111.2` | `192.168.111.0/24` |
+| node1 | rail2 (GPU2) | leaf1 | `192.168.112.3/31` | `192.168.112.2` | `192.168.112.0/24` |
+| node1 | rail3 (GPU3) | leaf1 | `192.168.113.3/31` | `192.168.113.2` | `192.168.113.0/24` |
+| node1 | rail4 (GPU4) | leaf2 | `192.168.114.3/31` | `192.168.114.2` | `192.168.114.0/24` |
+| node1 | rail5 (GPU5) | leaf2 | `192.168.115.3/31` | `192.168.115.2` | `192.168.115.0/24` |
+| node1 | rail6 (GPU6) | leaf2 | `192.168.116.3/31` | `192.168.116.2` | `192.168.116.0/24` |
+| node1 | rail7 (GPU7) | leaf2 | `192.168.117.3/31` | `192.168.117.2` | `192.168.117.0/24` |
+
+Adding **node2** = 8 more rows with VF `.5`/GW `.4` per rail (`dst` unchanged). The `dst` column
+repeating down each rail is the whole point — it's what keeps every node's rail *n* pointed at the
+same remote block, out NIC *n*.
 
 ## 8. Why there are N × 8 SriovNetwork objects (per-node NADs)
 
