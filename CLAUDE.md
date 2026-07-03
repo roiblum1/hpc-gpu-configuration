@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This repo holds **two co-dependent deliverables** for serving **GLM-5.1** (754B MoE / 40B active) on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on Dell XE9680-class HGX nodes (H200 / B200 / B300, 8 GPUs + 8 RoCEv2 rail NICs each):
 
 1. [glm51-openshift-deployment.md](glm51-openshift-deployment.md) — the **architecture document**: the prose rationale, the ordered build sequence, the validation gates, and the cross-layer invariants. This is the source of truth.
-2. [charts/](charts/) — a **Helm chart set that implements the document**, one chart per phase/subject (see [charts/README.md](charts/README.md)). The chart YAML must stay faithful to the doc; the doc is authoritative when they disagree.
+2. [charts/](charts/) — a **Helm chart set that implements the document**, one chart per phase/subject. The chart YAML must stay faithful to the doc; the doc is authoritative when they disagree.
 
 The two move together: a change to a load-bearing value (see "Editing rules") must land in **both** the document and the relevant chart's `values.yaml`. The YAML/bash blocks *inside the document* are still illustrative; the runnable manifests live in `charts/`.
 
@@ -37,6 +37,7 @@ It is written as an **ordered build sequence**, not a reference manual. Read and
 
 `charts/` mirrors the phases, **one chart per subject** (model-staging, node-foundation, gpu-operator, sriov-rails, lvms-storage, cert-manager, kai-scheduler, glm51-dynamo, gateway-tenancy, observability). Conventions to preserve:
 
+- **Every chart carries a scoped `CLAUDE.md`** — scope (owns / does-not-own), *why* each value is what it is, the §10 invariants it carries, and its gate. Read it before editing that chart; update it when you change a load-bearing value. Out-of-band host config lives in [charts/node-foundation/BIOS.md](charts/node-foundation/BIOS.md) (BIOS + `mlxconfig`); rail addressing/routing rationale in [charts/sriov-rails/ROUTING.md](charts/sriov-rails/ROUTING.md).
 - **Self-contained operators.** Where a subject needs an OLM operator, that operator's `Subscription`/`OperatorGroup` ships *inside the same chart* as the CRs it manages — not in a separate "operators" chart.
 - **`# §10` markers.** Every value that participates in a cross-layer invariant is tagged with a `# §10` comment at the top of its `values.yaml`. These are the chart-side mirror of the §10 matrix below. Treat them as a grep target: change one, `grep -rn "§10" charts/*/values.yaml`, and update every chart that shares the value.
 - **The two upstream engines are *not* vendored.** `kai-scheduler` and `glm51-dynamo` ship **only our config** (queues/priority-classes; the DynamoGraphDeployments) so they render standalone. The big upstream charts (the KAI engine; the Dynamo platform = operator + etcd + NATS) are installed separately and are **off by default** (`upstream.install: false`) for disconnected installs — mirror/clone them, or vendor as a subchart (`dependencies:` → drop into `charts/<chart>/charts/` → `helm dependency build`). Every image/chart ref is a `<your-registry>` / `<your-mirror>` placeholder to be pinned per Phase 0.

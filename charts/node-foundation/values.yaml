@@ -26,6 +26,8 @@ performanceProfile:
     pages:
       - size: "1G"
         count: 16
+  # NTO auto-generates isolcpus/nohz_full/rcu_nocbs/systemd.cpu_affinity + hugepages args
+  # from the cpusets — never add those here by hand (duplicate-arg drift). §1.2
   additionalKernelArgs:
     - "iommu=pt"              # passthrough — full IOMMU translation taxes GPUDirect RDMA
     - "intel_iommu=on"        # use amd_iommu=on for EPYC Blackwell chassis
@@ -34,6 +36,10 @@ performanceProfile:
     - "tsc=reliable"
     - "nowatchdog"
     - "nosoftlockup"
+    - "pcie_aspm=off"         # no PCIe link power states — ASPM exit latency spikes GDR/NVMe
+    - "rcu_nocb_poll"         # poll offloaded RCU callbacks instead of IPI-ing isolated cores
+    - "intel_idle.max_cstate=1"   # enforce the §1.5 C-state latency policy from the kernel side
+    - "processor.max_cstate=1"    # (drop both C-state args if idle power/thermals outweigh ITL jitter)
   # false: per-pod IRQ exclusion via the performance RuntimeClass + irq-load-balancing.crio.io
   # annotation on glm51-dynamo workers — the §3.3 low-latency pod contract. §10
   globallyDisableIrqLoadBalancing: false

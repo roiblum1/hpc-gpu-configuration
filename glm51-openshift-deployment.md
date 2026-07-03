@@ -135,6 +135,10 @@ spec:
     - "tsc=reliable"
     - "nowatchdog"
     - "nosoftlockup"
+    - "pcie_aspm=off"                   # no PCIe link power states — ASPM exit latency spikes GDR/NVMe
+    - "rcu_nocb_poll"                   # poll offloaded RCU callbacks instead of IPI-ing isolated cores
+    - "intel_idle.max_cstate=1"         # enforce the 1.5 C-state latency policy from the kernel side
+    - "processor.max_cstate=1"          # (drop both C-state args if idle power/thermals outweigh ITL jitter)
   globallyDisableIrqLoadBalancing: false  # per-pod IRQ exclusion instead — see the runtime-class contract in 3.3
   nodeSelector:
     node-role.kubernetes.io/gpu-hpc: ""
@@ -146,6 +150,8 @@ spec:
 
 1. **`topologyPolicy: best-effort`, not `single-numa-node`.** The pod granularity in this design is **full-node** (one worker pod = 8 GPUs + 8 rail VFs), because TP8/EP workers span both sockets by definition. `single-numa-node` (and `restricted`) would reject these pods at admission. Intra-pod NUMA correctness is delegated downward: the kubelet still gives the pod exclusive full physical cores via static CPU manager, and the serving runtime (vLLM/TRT-LLM) plus UCX/NIXL pin threads and buffers per-GPU/per-NIC NUMA-locally. The SR-IOV pools in Phase 3 remain NUMA-scoped so the runtime *can* pick rail-local devices.
 2. **Hugepages: small, not "size of the DRAM KV tier".** Refining my earlier suggestion: KVBM's host tier allocates **CUDA pinned (page-locked) memory**, not hugetlbfs — pre-reserving 1.5 TB of 1G hugepages would *steal* RAM from the very tier you're building. Reserve only what explicit hugetlbfs consumers need (DPDK-style tooling, some UCX configs); 16×1G is a safe starting allowance. Grow only if something measurably consumes them.
+
+**What NOT to put in `additionalKernelArgs`:** NTO generates `isolcpus=managed_irq,…`, `nohz_full`, `rcu_nocbs`, `systemd.cpu_affinity` and the hugepages args from the cpusets above — adding them by hand creates duplicate args with drifting values, a classic silent-failure source. The two C-state args enforce the 1.5 BIOS latency policy from the kernel side so BIOS drift can't reintroduce deep C-states; if idle power matters more than tail latency on your fleet, remove them and use the per-pod `cpu-c-states.crio.io` annotation (3.3) instead.
 
 ### 1.3 Sysctls and RDMA limits the profile does not cover
 

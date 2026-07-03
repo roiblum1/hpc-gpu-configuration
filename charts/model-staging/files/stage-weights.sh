@@ -21,6 +21,14 @@ else
   {{- else }}
   rsync -a --info=progress2 "{{ $.Values.source.rsyncBase }}/{{ .name }}/" "$target/"
   {{- end }}
+  # Gate 0 requires staged AND checksummed: ship a sha256sum.txt with each model
+  # (generated once at mirror time) so verification runs on every (re)stage.
+  if [ -f "$target/sha256sum.txt" ]; then
+    echo "[$m] verifying checksums..."
+    (cd "$target" && sha256sum -c sha256sum.txt --quiet)
+  else
+    echo "[$m] WARNING: no sha256sum.txt — Gate 0 checksum evidence missing" >&2
+  fi
   date -u +%FT%TZ > "$marker"
   echo "[$m] staged"
 fi
