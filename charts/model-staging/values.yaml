@@ -1,6 +1,6 @@
 # Phase 0 — model weight staging. Source: §0.
-# ENV BRANCH env/h100-8x-ib: MiniMax M2.7 (FP8) + the DFlash draft — a mirror of
-# z-lab/MiniMax-M2.7-DFlash (https://huggingface.co/z-lab/MiniMax-M2.7-DFlash).
+# ENV BRANCH env/h100-4x-ib: MiniMax M2.7 only — this environment runs MTP (native
+# heads in the checkpoint), so no DFlash draft is mirrored or staged here.
 # Worker pods (minimax-dynamo) mount hostPath:{{ hostPath }} read-only.
 
 roleLabel: gpu-hpc
@@ -16,10 +16,9 @@ source:
   rsyncBase: rsync://artifacts/models   # for type=rsync
 
 # Local dir name -> matches minimax-dynamo modelPaths (/models/<name>).
-# The draft is small next to the base model — stage it everywhere for free.
+# (If this env ever adopts DFlash, add the z-lab/MiniMax-M2.7-DFlash mirror here.)
 models:
-  - {name: minimax-m2.7,        ref: "minimax-m2.7@sha256:REPLACE"}
-  - {name: minimax-m2.7-dflash, ref: "minimax-m2.7-dflash@sha256:REPLACE"}   # z-lab/MiniMax-M2.7-DFlash mirror
+  - {name: minimax-m2.7, ref: "minimax-m2.7@sha256:REPLACE"}
 
 resources:
   requests: {cpu: "2", memory: 4Gi}

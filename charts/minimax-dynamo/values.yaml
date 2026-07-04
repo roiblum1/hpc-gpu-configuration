@@ -1,11 +1,13 @@
-# Phase 6 — MiniMax M2.7 + DFlash on Dynamo + Grove. ENV BRANCH env/h100-8x-ib:
-# 8× DGX H100 over InfiniBand. Rationale: ../../minimax-m27-dflash-design.md; the
-# LWS original this chart translates: ../../reference/minimax-m27-dflash-lws.yaml.
+# Phase 6 — MiniMax M2.7 on Dynamo + Grove. ENV BRANCH env/h100-4x-ib:
+# 4× DGX H100 over InfiniBand — the 8-node design (env/h100-8x-ib) halved.
+# Rationale: ../../minimax-m27-dflash-design.md; the LWS original this chart
+# translates: ../../reference/minimax-m27-dflash-lws.yaml.
 #
-# Topology: 4 worker gangs × 2 nodes = exactly 8 DGX H100. TP8 on NVLink inside each
+# Topology: 2 worker gangs × 2 nodes = exactly 4 DGX H100. TP8 on NVLink inside each
 # node; DP2 + --enable-expert-parallel across the gang => experts sharded EP16-wide,
 # MoE all-to-all over IB via DeepEP. Attention/KV stay node-local. A node loss kills
-# exactly ONE gang — the other 3 keep serving at 75% capacity (design §5).
+# exactly ONE gang — the other keeps serving at 50% capacity (design §5, N=2).
+# Speculative decoding: MTP (native heads) — DFlash is the 8-node environment's method.
 
 namespace: llm-serving
 maxModelLen: 196608          # 192K context
@@ -75,7 +77,7 @@ frontend:
     memory: 64Gi
 
 worker:
-  replicas: 4                 # 4 gangs × nodeCount 2 = exactly 8 DGX H100
+  replicas: 2                 # 2 gangs × nodeCount 2 = exactly 4 DGX H100
   nodeCount: 2                # the Grove gang = the LWS group; KAI schedules it atomically. §5
   tensorParallel: 8           # intra-node, NVLink/NVSwitch — the fabric never carries TP
   dataParallel: 2             # one DP rank per gang node; with EP => EP16 across the gang
@@ -97,15 +99,14 @@ worker:
                               # (112 logical, SMT off, minus 16 reserved = 96)
     memory: 1500Gi
 
-# Speculative decoding — DFlash by DEFAULT: this 8-node env is the DFlash environment,
-# draft = z-lab/MiniMax-M2.7-DFlash staged at modelPaths.dflashDraft. High K is right
-# for DFlash (all K draft tokens cost ONE forward, unlike EAGLE-style drafting).
-# disable_by_batch_size makes the diurnal pattern self-managing: speculation active at
-# night (small batches, bandwidth-bound), silently off at daytime peak (compute-bound),
-# where wide-EP's KV headroom does the work instead (design §6).
-# Zero-artifact fallback (native MTP heads in the checkpoint): method: mtp.
+# Speculative decoding — MTP by DEFAULT on this branch: DFlash is used ONLY in the
+# 8-node environment (env/h100-8x-ib). MTP uses the native heads shipped in the
+# checkpoint — zero extra VRAM, no draft artifact to stage. The dflash config stays
+# fully wired (set method: dflash + stage the z-lab draft via model-staging) if this
+# environment ever adopts it. disable_by_batch_size keeps the diurnal pattern
+# self-managing either way (design §6).
 speculative:
-  method: dflash              # dflash | mtp
+  method: mtp                 # mtp | dflash (dflash is the 8-node env's default)
   numSpeculativeTokens: 8     # used by dflash
   draftTensorParallelSize: 1  # keep the small draft on one GPU per rank
   mtpNumSpeculativeTokens: 3  # used by mtp

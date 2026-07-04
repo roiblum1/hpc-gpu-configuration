@@ -2,11 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **Environment branch `env/h100-8x-ib`** — 8× DGX H100, **InfiniBand**, **MiniMax M2.7 +
-> DFlash** on Dynamo + Grove (chart `minimax-dynamo` replaces `glm51-dynamo`; `sriov-rails`
-> unused — rails are user-provided; `roceQos` disabled). Read [ENVIRONMENT.md](ENVIRONMENT.md)
-> and [minimax-m27-dflash-design.md](minimax-m27-dflash-design.md) before editing — where they
-> and the GLM architecture doc disagree, this environment follows them.
+> **Environment branch `env/h100-4x-ib`** — 4× DGX H100, **InfiniBand**, **MiniMax M2.7 +
+> MTP** on Dynamo + Grove — the 8-node design halved: 2 wide-EP gangs × 2 nodes; **DFlash is
+> the 8-node env's method, not this one's** (chart `minimax-dynamo` replaces `glm51-dynamo`;
+> `sriov-rails` unused — rails are user-provided; `roceQos` disabled). Read
+> [ENVIRONMENT.md](ENVIRONMENT.md) and [minimax-m27-dflash-design.md](minimax-m27-dflash-design.md)
+> before editing — where they and the GLM architecture doc disagree, this environment follows them.
 
 ## What this repository is
 

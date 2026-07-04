@@ -1,12 +1,12 @@
-# MiniMax M2.7 on OpenShift 4.20 — Helm charts (env/h100-8x-ib)
+# MiniMax M2.7 on OpenShift 4.20 — Helm charts (env/h100-4x-ib)
 
-> **Environment branch `env/h100-8x-ib` — 8× DGX H100, InfiniBand, MiniMax M2.7 + DFlash.**
-> Serving = one Dynamo DGD: 4 wide-EP worker gangs of 2 nodes each (TP8 on NVLink, DP2 + EP16
-> via DeepEP over IB), DFlash speculative decoding (draft: `z-lab/MiniMax-M2.7-DFlash`,
-> mirrored). SR-IOV rails are user-provided (the `sriov-rails` chart is not used). Full delta
-> from `main`: [ENVIRONMENT.md](ENVIRONMENT.md).
+> **Environment branch `env/h100-4x-ib` — 4× DGX H100, InfiniBand, MiniMax M2.7 + MTP.**
+> The 8-node design halved: one Dynamo DGD with 2 wide-EP worker gangs of 2 nodes each (TP8 on
+> NVLink, DP2 + EP16 via DeepEP over IB). Speculative decoding = **MTP** (native heads —
+> DFlash is the 8-node environment's method). SR-IOV rails are user-provided (the
+> `sriov-rails` chart is not used). Full delta: [ENVIRONMENT.md](ENVIRONMENT.md).
 
-This branch serves **MiniMax M2.7** (230B MoE / 10B active) on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on 8× DGX H100 nodes (8 GPUs + 8 InfiniBand rail NICs each). It holds:
+This branch serves **MiniMax M2.7** (230B MoE / 10B active) on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on 4× DGX H100 nodes (8 GPUs + 8 InfiniBand rail NICs each). It holds:
 
 1. [glm51-openshift-deployment.md](glm51-openshift-deployment.md) — the **architecture document** for the phase/gate build discipline and cross-layer invariants (written for the GLM/RoCE mainline; this branch's deltas live in [ENVIRONMENT.md](ENVIRONMENT.md)).
 2. [minimax-m27-dflash-design.md](minimax-m27-dflash-design.md) — this branch's **serving design record**: topology, memory math, survivability, DFlash (original LWS manifest kept in [reference/](reference/)).
@@ -28,14 +28,14 @@ Out-of-band host config that is **not** a chart: [charts/node-foundation/BIOS.md
 
 | Phase | Subject | Chart | Key objects |
 |-------|---------|-------|-------------|
-| 0 | Model staging | [`model-staging`](charts/model-staging) | DaemonSet that pre-stages MiniMax M2.7 + the DFlash draft to local NVMe |
+| 0 | Model staging | [`model-staging`](charts/model-staging) | DaemonSet that pre-stages the MiniMax M2.7 weights to local NVMe (no DFlash draft — MTP env) |
 | 1 | Kernel tuning / node foundation | [`node-foundation`](charts/node-foundation) | MachineConfigPool, PerformanceProfile, Tuned, CRI-O memlock MC (RoCE QoS MC **disabled** — IB fabric) |
 | 2 | GPU | [`gpu-operator`](charts/gpu-operator) | NFD + GPU Operator subscriptions, NodeFeatureDiscovery, ClusterPolicy |
 | 3 | IB rails (networking) | [`sriov-rails`](charts/sriov-rails) | **Not used on this branch** — IB rail NADs come from the user's own templated config (Gate 3 still applies to them) |
 | 4 | Storage | [`lvms-storage`](charts/lvms-storage) | LVMS operator, LVMCluster (kvcache + models device classes) |
 | — | Certificates (cross-cutting prereq) | [`cert-manager`](charts/cert-manager) | cert-manager operator subscription |
 | 5 | Scheduling | [`kai-scheduler`](charts/kai-scheduler) | KAI upstream (dependency), Queue hierarchy, PriorityClasses |
-| 6 | Serving | [`minimax-dynamo`](charts/minimax-dynamo) | Dynamo platform (dependency), one DGD: KV-router Frontend + 4 wide-EP gangs, worker PDB |
+| 6 | Serving | [`minimax-dynamo`](charts/minimax-dynamo) | Dynamo platform (dependency), one DGD: KV-router Frontend + 2 wide-EP gangs, worker PDB |
 | 7 | Front door / tenancy | [`gateway-tenancy`](charts/gateway-tenancy) | OSSM3 + Kuadrant subscriptions, Gateway, HTTPRoutes, AuthPolicy, RateLimitPolicy |
 | 8 | Observability | [`observability`](charts/observability) | ServiceMonitors, PrometheusRule alerts, dashboards |
 

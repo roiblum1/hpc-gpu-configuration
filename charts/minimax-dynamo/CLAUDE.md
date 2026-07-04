@@ -1,4 +1,9 @@
-# CLAUDE.md — `minimax-dynamo` chart (Phase 6, env/h100-8x-ib)
+# CLAUDE.md — `minimax-dynamo` chart (Phase 6, env/h100-4x-ib)
+
+> **This branch = the 8-node design halved:** 2 gangs × 2 nodes on 4 DGX H100, and
+> **MTP instead of DFlash** (DFlash is used only in the 8-node environment; it stays wired
+> behind `speculative.method`). Blast radius at N=2: a node loss = 50% of capacity — the
+> islands fallback (25%) is most worth benchmarking *here*.
 
 Scoped guidance for **this chart only**. Repo-root [CLAUDE.md](../../CLAUDE.md), this branch's
 [ENVIRONMENT.md](../../ENVIRONMENT.md), and the design record
@@ -9,7 +14,7 @@ doubt about intent, read the design doc, not the manifest.
 
 ## Scope — what this chart owns (and does not)
 
-**Owns:** the one `DynamoGraphDeployment` (Frontend + 4 wide-EP worker gangs), the worker PDB,
+**Owns:** the one `DynamoGraphDeployment` (Frontend + 2 wide-EP worker gangs), the worker PDB,
 and the `llm-serving` namespace. **Config only** — the Dynamo *platform* (operator + etcd +
 NATS) is upstream, off by default (`upstream.install: false`); pin **etcd/NATS to infra nodes,
 never GPU nodes**.
@@ -19,15 +24,17 @@ tuning + RuntimeClass existence (→ `node-foundation`, with `roceQos` disabled)
 queues/PriorityClasses (→ `kai-scheduler`) · the front door (→ `gateway-tenancy`) · the DFlash
 draft artifact (→ `model-staging` stages the `z-lab/MiniMax-M2.7-DFlash` mirror).
 
-## Why the topology is 4 gangs × 2 nodes (design §1 — don't "simplify" it either way)
+## Why the topology is 2 gangs × 2 nodes (design §1 — don't "simplify" it either way)
 
 M2.7 fits on one node, so wide-EP must earn its complexity: sharding 256 experts EP16-wide
-frees ~14–15 GB HBM/GPU → KV cache → daytime concurrency. One giant EP64 group is rejected
-(node loss = total outage); 8 islands is the *fallback*, not the default (IB carries nothing,
-less KV headroom). The escape hatch is deliberately cheap: `replicas: 8, nodeCount: 1,
+frees ~14–15 GB HBM/GPU → KV cache → daytime concurrency. One giant EP32 group is rejected
+(node loss = total outage); 4 islands is the *fallback*, not the default (IB carries nothing,
+less KV headroom). The escape hatch is deliberately cheap: `replicas: 4, nodeCount: 1,
 dataParallel: 1` lands on the island layout with zero re-architecture — that is *why* the
 chart keeps the gang machinery even though islands wouldn't need it. Settle the choice by
-measurement: wide-EP must buy > ~15% peak throughput to beat the better blast radius (§5).
+measurement: wide-EP must buy enough peak throughput to beat the better blast radius (§5) —
+and at N=2 gangs (50% loss per node event vs 25% for islands) the bar is *higher* than in
+the 8-node environment.
 
 ## Why each configuration is what it is
 
@@ -51,13 +58,13 @@ measurement: wide-EP must buy > ~15% peak throughput to beat the better blast ra
 - **`NCCL_IB_TIMEOUT=22` / `RETRY_CNT=13` — deliberately generous:** with EP spanning nodes, a
   transient link flap stalls the gang instead of aborting the communicator (= killing it).
   Tail latency during a flap is the accepted price of gang survival.
-- **DFlash default (`speculative.method: dflash`), K=8, draft TP1** — this env is the DFlash
-  environment; the draft is the mirrored `z-lab/MiniMax-M2.7-DFlash`. High K because all K
-  tokens cost one draft forward. `disable_by_batch_size: 32` makes day/night self-managing —
-  speculation at night, raw batching at peak; wide-EP and DFlash are complementary across the
-  diurnal cycle, not redundant. `mtp` (K=3) is the zero-artifact fallback — native heads in
-  the checkpoint. Alert on acceptance rate (§8): below threshold, speculation is pure
-  verification overhead.
+- **MTP default (`speculative.method: mtp`, K=3)** — native heads in the checkpoint, zero
+  extra VRAM, no draft artifact to stage. **DFlash belongs to the 8-node environment**; it
+  stays fully wired here (flip the method + stage the z-lab draft via model-staging) so
+  adopting it later is a one-value change. `disable_by_batch_size: 32` makes day/night
+  self-managing — speculation at night, raw batching at peak; wide-EP and speculation are
+  complementary across the diurnal cycle, not redundant. Alert on acceptance rate (§8):
+  below threshold, speculation is pure verification overhead.
 - **NUMA (design §4):** `single-numa-node` is mathematically impossible for full-node pods —
   alignment here means each worker's memory/RDMA buffers stay on its GPU's socket. Guaranteed
   QoS + static CPU manager + NCCL/DeepEP walking PCIe topology capture most of it;

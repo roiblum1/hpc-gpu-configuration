@@ -1,6 +1,6 @@
 # model-staging — Phase 0
 
-Pre-stages the MiniMax M2.7 weights **and the DFlash draft model** onto every GPU node's local NVMe **before** any serving pod starts, so worker startup and restarts cost **zero** pull time.
+Pre-stages the MiniMax M2.7 weights onto every GPU node's local NVMe **before** any serving pod starts, so worker startup and restarts cost **zero** pull time. (No DFlash draft on this branch — the 4-node environment runs MTP.)
 
 ## Why it matters
 
@@ -31,10 +31,10 @@ helm template model-staging      # inspect the rendered DaemonSet + script
 | `image` | `<your-registry>/tools/skopeo:latest` | Image with `skopeo` (+ `rsync`), from your mirror |
 | `source.type` | `oci` | `oci` (skopeo from mirror, by digest) or `rsync` (artifact server) |
 | `source.registry` / `source.rsyncBase` | placeholder | Where staged weights come from |
-| `models[]` | `minimax-m2.7`, `minimax-m2.7-dflash` | Dir names — must match `minimax-dynamo.modelPaths`; refs pinned **by digest** |
+| `models[]` | `minimax-m2.7` | Dir names — must match `minimax-dynamo.modelPaths`; refs pinned **by digest** |
 | `resources` | 2 CPU / 4 Gi | I/O-bound; kept small so it stays schedulable and harmless to the reserved-CPU budget |
 
-**Base model + DFlash draft** (`env/h100-8x-ib`): the draft is a mirror of [z-lab/MiniMax-M2.7-DFlash](https://huggingface.co/z-lab/MiniMax-M2.7-DFlash); it is small next to the base checkpoint, so it is staged on every node — a gang can recreate anywhere without a re-stage.
+**Base model only** (`env/h100-4x-ib`): MTP uses the native heads in the checkpoint — no draft artifact. If this environment ever adopts DFlash, add the [z-lab/MiniMax-M2.7-DFlash](https://huggingface.co/z-lab/MiniMax-M2.7-DFlash) mirror to `models[]` and flip `speculative.method` in minimax-dynamo.
 
 ## Gate 0 (do not proceed past failure)
 

@@ -35,8 +35,8 @@ RoCE metrics exporter** (see the honest gap below).
     not scheduling noise.
 - **`dynamoFrontend` monitor** scrapes the frontend's OpenAI-metrics + router stats in
   `llm-serving` — on this branch that includes the **spec-decode acceptance** signal
-  (`mtpAcceptanceMin` watches DFlash) and DeepEP dispatch latency, the two numbers that decide
-  whether the wide-EP topology earns its keep (design §7).
+  (`mtpAcceptanceMin` watches MTP here; DFlash is the 8-node env) and DeepEP dispatch latency,
+  the two numbers that decide whether the wide-EP topology earns its keep (design §7).
 - **`roceExporter` is DISABLED on this branch** (IB fabric — no PFC/CNP counters exist; the
   PFC-pause alert renders only when the exporter is enabled). IB fabric health is watched out
   of band (UFM / subnet manager); `ibstat` all-rails-Active is Gate 1's check.

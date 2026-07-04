@@ -32,10 +32,10 @@ or an out-of-band LV) · consumption of the weights (→ `minimax-dynamo` mounts
   model dir ships a `sha256sum.txt` (generate it at mirror time), the script verifies it on
   every (re)stage — that is Gate 0's "staged **and checksummed**" evidence. No manifest = loud
   warning, not silent pass.
-- **Base model + DFlash draft** (`minimax-m2.7`, `minimax-m2.7-dflash` — the z-lab mirror) are
-  staged on every node: the draft is small next to the 230 GB base, and any node must be able
-  to host a recreated gang without a re-stage. Directory names must match `minimax-dynamo`'s
-  `modelPaths` (`/models/<name>`).
+- **Base model only** (`minimax-m2.7`) on this branch: the 4-node environment runs MTP (native
+  heads in the checkpoint), so there is no DFlash draft to stage — adopting DFlash later means
+  adding the z-lab mirror to `models[]` plus one value flip in `minimax-dynamo`. Directory
+  names must match `minimax-dynamo`'s `modelPaths` (`/models/<name>`).
 - **Tiny resources** (2 CPU / 4 Gi): the pod is I/O-bound; keep it schedulable on busy nodes and
   harmless on the reserved-CPU budget.
 
