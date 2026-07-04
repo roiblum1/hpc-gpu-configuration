@@ -1,0 +1,264 @@
+# =====================================================================
+# REFERENCE ONLY — the original LeaderWorkerSet design this branch
+# implements via Dynamo + Grove in charts/minimax-dynamo. Kept for
+# provenance; do NOT apply alongside the chart (two deployments would
+# fight over the same 8 nodes). Rationale: ../minimax-m27-dflash-design.md
+# =====================================================================
+# MiniMax M2.7 + DFlash speculative decoding on 8x DGX H100 (OCP 4.20+)
+#
+# Topology: 4 serving groups x 2 nodes each
+#   - TP=8 inside each node (NVLink/NVSwitch)
+#   - DP=2 across the two nodes of a group, --enable-expert-parallel
+#     => MoE experts sharded EP=16-wide across the group, all-to-all
+#        over InfiniBand (DeepEP), attention/KV replicated per node.
+#   - DFlash draft+verify runs inside each DP rank (NVLink-resident).
+#
+# HA: a node failure kills exactly ONE group (2/8 nodes). The other
+#     3 groups (75% capacity) keep serving. See DESIGN.md section 5.
+#
+# Every value marked  <<< CHANGE  must be adapted to your environment.
+# =====================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-serving
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: minimax-m27
+  namespace: llm-serving
+  annotations:
+    # Keep both nodes of a group under the same IB leaf / rail block so
+    # the EP all-to-all never crosses a spine. Label must exist on nodes.
+    leaderworkerset.sigs.k8s.io/exclusive-topology: network.topology/block   # <<< CHANGE to your leaf/block node label
+spec:
+  replicas: 4                       # 4 groups x size 2 = exactly 8 DGX H100
+  startupPolicy: LeaderCreated
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxUnavailable: 1             # roll one group at a time -> never below 75% capacity
+      maxSurge: 0                   # no spare nodes to surge onto
+  leaderWorkerTemplate:
+    size: 2
+    # NCCL / DeepEP state spans the whole group; a single-pod restart can
+    # never rejoin cleanly, so always recreate the group atomically.
+    restartPolicy: RecreateGroupOnPodRestart
+
+    # ----------------------------- LEADER (DP rank 0 + API server) ----
+    leaderTemplate:
+      metadata:
+        labels:
+          app: minimax-m27
+          role: leader
+        annotations:
+          # Per-rail IB attachments (Multus NADs). Match your SR-IOV /
+          # host-device rail pools; one VF per rail, paired GPU<->NIC.
+          k8s.v1.cni.cncf.io/networks: llm-serving/ib-rail1,llm-serving/ib-rail2,llm-serving/ib-rail3,llm-serving/ib-rail4,llm-serving/ib-rail5,llm-serving/ib-rail6,llm-serving/ib-rail7,llm-serving/ib-rail8   # <<< CHANGE
+      spec:
+        nodeSelector:
+          node-role.kubernetes.io/dgx-h100: ""                     # <<< CHANGE
+        priorityClassName: llm-serving-critical                    # <<< CHANGE / create
+        terminationGracePeriodSeconds: 180
+        containers:
+        - name: vllm
+          image: registry.internal/llm/vllm-openai:v0.2x.y         # <<< CHANGE (mirrored, DeepEP+DeepGEMM built in)
+          command: ["/bin/sh", "-c"]
+          args:
+          - |
+            exec vllm serve /models/MiniMax-M2.7 \
+              --served-model-name minimax-m2.7 \
+              --host 0.0.0.0 --port 8000 \
+              --tensor-parallel-size 8 \
+              --data-parallel-size 2 \
+              --data-parallel-size-local 1 \
+              --data-parallel-address ${LWS_LEADER_ADDRESS} \
+              --data-parallel-rpc-port 13345 \
+              --enable-expert-parallel \
+              --api-server-count 4 \
+              --kv-cache-dtype fp8_e4m3 \
+              --gpu-memory-utilization 0.90 \
+              --max-model-len 196608 \
+              --max-num-seqs 128 \
+              --max-num-batched-tokens 8192 \
+              --enable-prefix-caching \
+              --enable-chunked-prefill \
+              --enable-auto-tool-choice --tool-call-parser minimax_m2 \
+              --reasoning-parser minimax_m2_append_think \
+              --trust-remote-code \
+              --speculative-config '{
+                "method": "dflash",
+                "model": "/models/minimax-m2.7-dflash-draft",
+                "num_speculative_tokens": 8,
+                "draft_tensor_parallel_size": 1,
+                "disable_by_batch_size": 32
+              }'
+            # Zero-cost fallback using the native MTP heads shipped in the
+            # checkpoint:
+            #   --speculative-config '{"method":"mtp","num_speculative_tokens":3,"disable_by_batch_size":32}'
+          env:
+          - name: HF_HUB_OFFLINE
+            value: "1"
+          - name: VLLM_ALL2ALL_BACKEND
+            value: "deepep_low_latency"        # decode-optimized EP all-to-all over IB
+          - name: NCCL_IB_HCA
+            value: "mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7"   # <<< CHANGE: compute rails only, exclude storage/mgmt HCAs
+          - name: NCCL_SOCKET_IFNAME
+            value: "eth0"                      # bootstrap/control only
+          - name: GLOO_SOCKET_IFNAME
+            value: "eth0"
+          - name: NCCL_IB_TIMEOUT
+            value: "22"                        # ride through brief link flaps
+          - name: NCCL_IB_RETRY_CNT
+            value: "13"
+          - name: NCCL_IB_QPS_PER_CONNECTION
+            value: "4"
+          # Per vLLM MiniMax recipe on Hopper: DeepGEMM for dense linears,
+          # disabled for MoE expert layers. Verify exact env names for
+          # your vLLM build:
+          - name: VLLM_USE_DEEP_GEMM
+            value: "1"
+          ports:
+          - name: api
+            containerPort: 8000
+          - name: dp-rpc
+            containerPort: 13345
+          resources:
+            requests: &res
+              nvidia.com/gpu: "8"
+              rdma/ib: "8"                     # <<< CHANGE to your device-plugin resource name(s) / per-rail pools
+              cpu: "96"                        # integer CPUs + limits==requests => Guaranteed QoS => CPU-manager pinning
+              memory: 1500Gi
+            limits: *res
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK"]                # RDMA memory registration
+          volumeMounts:
+          - { name: models, mountPath: /models, readOnly: true }
+          - { name: dshm, mountPath: /dev/shm }
+          startupProbe:                        # weight load + CUDA graph capture takes many minutes
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 15
+            failureThreshold: 160              # up to 40 min
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            periodSeconds: 30
+            failureThreshold: 5
+        volumes:
+        - name: models
+          hostPath: { path: /raid/models, type: Directory }        # <<< CHANGE (local NVMe mirror or RWX PVC)
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 512Gi }
+
+    # ----------------------------- WORKER (DP rank 1, headless) -------
+    workerTemplate:
+      metadata:
+        labels:
+          app: minimax-m27
+          role: worker
+        annotations:
+          k8s.v1.cni.cncf.io/networks: llm-serving/ib-rail1,llm-serving/ib-rail2,llm-serving/ib-rail3,llm-serving/ib-rail4,llm-serving/ib-rail5,llm-serving/ib-rail6,llm-serving/ib-rail7,llm-serving/ib-rail8   # <<< CHANGE
+      spec:
+        nodeSelector:
+          node-role.kubernetes.io/dgx-h100: ""                     # <<< CHANGE
+        priorityClassName: llm-serving-critical
+        terminationGracePeriodSeconds: 180
+        containers:
+        - name: vllm
+          image: registry.internal/llm/vllm-openai:v0.2x.y         # <<< CHANGE
+          command: ["/bin/sh", "-c"]
+          args:
+          - |
+            exec vllm serve /models/MiniMax-M2.7 \
+              --served-model-name minimax-m2.7 \
+              --headless \
+              --tensor-parallel-size 8 \
+              --data-parallel-size 2 \
+              --data-parallel-size-local 1 \
+              --data-parallel-start-rank 1 \
+              --data-parallel-address ${LWS_LEADER_ADDRESS} \
+              --data-parallel-rpc-port 13345 \
+              --enable-expert-parallel \
+              --kv-cache-dtype fp8_e4m3 \
+              --gpu-memory-utilization 0.90 \
+              --max-model-len 196608 \
+              --max-num-seqs 128 \
+              --max-num-batched-tokens 8192 \
+              --enable-prefix-caching \
+              --enable-chunked-prefill \
+              --trust-remote-code \
+              --speculative-config '{
+                "method": "dflash",
+                "model": "/models/minimax-m2.7-dflash-draft",
+                "num_speculative_tokens": 8,
+                "draft_tensor_parallel_size": 1,
+                "disable_by_batch_size": 32
+              }'
+          env:
+          - { name: HF_HUB_OFFLINE, value: "1" }
+          - { name: VLLM_ALL2ALL_BACKEND, value: "deepep_low_latency" }
+          - { name: NCCL_IB_HCA, value: "mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7" }   # <<< CHANGE
+          - { name: NCCL_SOCKET_IFNAME, value: "eth0" }
+          - { name: GLOO_SOCKET_IFNAME, value: "eth0" }
+          - { name: NCCL_IB_TIMEOUT, value: "22" }
+          - { name: NCCL_IB_RETRY_CNT, value: "13" }
+          - { name: NCCL_IB_QPS_PER_CONNECTION, value: "4" }
+          - { name: VLLM_USE_DEEP_GEMM, value: "1" }
+          resources:
+            requests: &wres
+              nvidia.com/gpu: "8"
+              rdma/ib: "8"                     # <<< CHANGE
+              cpu: "96"
+              memory: 1500Gi
+            limits: *wres
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK"]
+          volumeMounts:
+          - { name: models, mountPath: /models, readOnly: true }
+          - { name: dshm, mountPath: /dev/shm }
+          livenessProbe:                       # headless: no HTTP; just verify the engine process lives
+            exec:
+              command: ["/bin/sh", "-c", "pgrep -f 'vllm serve' > /dev/null"]
+            periodSeconds: 30
+            failureThreshold: 5
+        volumes:
+        - name: models
+          hostPath: { path: /raid/models, type: Directory }        # <<< CHANGE
+        - name: dshm
+          emptyDir: { medium: Memory, sizeLimit: 512Gi }
+---
+# Client-facing service: selects ONLY ready leaders. A dead group drops
+# out of Endpoints automatically -> instant failover to surviving groups.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minimax-m27
+  namespace: llm-serving
+spec:
+  selector:
+    leaderworkerset.sigs.k8s.io/name: minimax-m27
+    role: leader
+  ports:
+  - name: api
+    port: 8000
+    targetPort: 8000
+---
+# Never let voluntary disruptions (drain/maintenance) take more than one
+# group down at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minimax-m27-leaders
+  namespace: llm-serving
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      leaderworkerset.sigs.k8s.io/name: minimax-m27
+      role: leader

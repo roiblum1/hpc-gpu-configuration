@@ -4,7 +4,7 @@
 # version you mirrored — adjust group/version if your bundle differs.
 
 ingressNamespace: openshift-ingress
-servingNamespace: glm-serving
+servingNamespace: llm-serving
 
 operators:
   servicemesh:                 # OSSM3 provides the openshift-default Gateway API (Istio-based)
@@ -44,13 +44,16 @@ gateway:
         name: ""               # e.g. a ClusterIssuer name
         kind: ClusterIssuer
 
+# ENV BRANCH env/h100-8x-ib: ONE DGD, ONE frontend (minimax-dynamo has no batch DGD —
+# disable_by_batch_size self-manages the diurnal pattern). Both hostnames route to the
+# same frontend so the per-lane token budgets below still apply per tenant/lane.
 routes:
   interactive:
-    name: glm51-interactive
-    backendService: glm51-frontend
+    name: minimax-interactive
+    backendService: minimax-m27-frontend   # must track the DGD frontend Service name in minimax-dynamo
   batch:
-    name: glm51-batch
-    backendService: glm51-batch-frontend
+    name: minimax-batch
+    backendService: minimax-m27-frontend
   backendPort: 8000
 
 tenancy:

@@ -1,6 +1,7 @@
 # Phase 0 — model weight staging. Source: §0.
-# Mirror BOTH quantizations: FP8 (prefill/H200) and NVFP4 (decode/Blackwell).
-# Worker pods (glm51-dynamo) mount hostPath:{{ hostPath }} read-only.
+# ENV BRANCH env/h100-8x-ib: MiniMax M2.7 (FP8) + the DFlash draft — a mirror of
+# z-lab/MiniMax-M2.7-DFlash (https://huggingface.co/z-lab/MiniMax-M2.7-DFlash).
+# Worker pods (minimax-dynamo) mount hostPath:{{ hostPath }} read-only.
 
 roleLabel: gpu-hpc
 hostPath: /var/lib/models          # dedicated 'models' LV, separate from the KV-cache LV (§0 / §4)
@@ -14,10 +15,11 @@ source:
   registry: <your-registry>/models # for type=oci: docker://<registry>/<ref>
   rsyncBase: rsync://artifacts/models   # for type=rsync
 
-# Local dir name -> matches glm51-dynamo modelPaths (/models/<name>).
+# Local dir name -> matches minimax-dynamo modelPaths (/models/<name>).
+# The draft is small next to the base model — stage it everywhere for free.
 models:
-  - {name: glm-5.1-fp8,   ref: "glm-5.1-fp8@sha256:REPLACE"}
-  - {name: glm-5.1-nvfp4, ref: "glm-5.1-nvfp4@sha256:REPLACE"}
+  - {name: minimax-m2.7,        ref: "minimax-m2.7@sha256:REPLACE"}
+  - {name: minimax-m2.7-dflash, ref: "minimax-m2.7-dflash@sha256:REPLACE"}   # z-lab/MiniMax-M2.7-DFlash mirror
 
 resources:
   requests: {cpu: "2", memory: 4Gi}

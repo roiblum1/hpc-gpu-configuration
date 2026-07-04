@@ -15,13 +15,14 @@ upstream:
 
 # Queue hierarchy (scheduling.run.ai/v2). Quotas in GPU counts; quota=-1 means unbounded.
 # Keep quotas in multiples of the EP group size (= multinode.nodeCount x 8) so gangs fit cleanly.
+# ENV BRANCH env/h100-8x-ib: 8 nodes x 8 = 64 GPUs total; gang size 16 (2-node EP16 gangs).
 queues:
   root:
     name: org
   interactive:
     name: serving-interactive
     priority: 100
-    gpu: {quota: 64, limit: 96, overQuotaWeight: 3}   # guaranteed floor = SLO capacity
+    gpu: {quota: 64, limit: 64, overQuotaWeight: 3}   # guaranteed floor = SLO capacity (= whole env, 4 gangs)
   batch:
     name: serving-batch
     priority: 50

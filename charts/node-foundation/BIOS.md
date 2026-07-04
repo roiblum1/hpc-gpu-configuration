@@ -1,5 +1,10 @@
 # BIOS + NIC firmware checklist — `gpu-hpc` nodes (Phase 1.5)
 
+> **ENV BRANCH env/h100-8x-ib (DGX H100, InfiniBand):** the server-BIOS table applies as-is
+> (DGX BIOS menus differ from Dell iDRAC — verify by *effect*, as stated below). In the NIC
+> firmware section, the **RoCE/DCBX rows do not apply** to IB-mode ConnectX-7s (`LINK_TYPE_P1=IB`;
+> there is no DSCP trust or DCBX to disable on IB) — the SR-IOV/VF and PCIe rows still do.
+
 Out-of-band host configuration that **no chart can deliver** — it lives here (next to the chart
 that owns the host layer) so it travels with `node-foundation`, but it is applied via
 iDRAC/racadm/BIOS setup and `mlxconfig`, never as a Kubernetes object. Verify each item with the

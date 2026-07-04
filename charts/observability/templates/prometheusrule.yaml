@@ -9,7 +9,9 @@ metadata:
   namespace: {{ .Values.namespace }}
 spec:
   groups:
-    - name: glm51-fabric
+    {{- if .Values.serviceMonitors.roceExporter.enabled }}
+    # RoCE-only group — meaningless on IB fabrics (no PFC/CNP), so it follows the exporter.
+    - name: serving-fabric
       rules:
         - alert: RoCEPFCPauseStorm
           # TODO: real metric, e.g. rate(node_roce_pfc_pause_duration_seconds_total[5m])
@@ -19,6 +21,7 @@ spec:
           annotations:
             summary: "RoCE PFC pause storm on {{`{{ $labels.device }}`}}"
             description: "Sustained PFC pause = fabric QoS drift (switch/NIC mismatch). Audit §10 DSCP/TC/PFC."
+    {{- end }}
     - name: glm51-serving
       rules:
         - alert: MTPAcceptanceCollapse

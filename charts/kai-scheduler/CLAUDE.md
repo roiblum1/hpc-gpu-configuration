@@ -11,7 +11,7 @@ PriorityClasses. The **KAI engine itself is upstream** and off by default
 build`. This chart must render standalone in a disconnected cluster either way.
 
 **Does NOT own:** pod wiring (`schedulerName`, queue labels, priorityClassName → applied in
-`glm51-dynamo`) · Grove/LWS controllers (doc component #8 — installed out of band from mirrored
+`minimax-dynamo`) · Grove/LWS controllers (doc component #8 — installed out of band from mirrored
 manifests; KAI's pod-grouper *detects* their groups, nothing here deploys them).
 
 ## The one rule this chart exists to enforce
@@ -45,7 +45,7 @@ unexplained Pending pods and phantom capacity.
 
 ## Cross-layer invariants this chart carries (§10)
 One quota brain (no Kueue/Run:ai here — and no GIE EPP router-side, the *other* single-brain
-rule) · queue names + PriorityClass names ↔ `glm51-dynamo` values (`queues.*`,
+rule) · queue names + PriorityClass names ↔ `minimax-dynamo` values (`queues.*`,
 `priorityClasses.*`) · quotas in multiples of gang size ↔ DGD `multinode.nodeCount`.
 
 ## Gate 5 (do not proceed past failure)

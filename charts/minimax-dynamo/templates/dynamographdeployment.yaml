@@ -1,0 +1,111 @@
+# MiniMax M2.7 wide-EP on Dynamo + Grove — translation of the LWS original
+# (../../reference/minimax-m27-dflash-lws.yaml; rationale in
+# ../../minimax-m27-dflash-design.md). Each worker replica is a 2-node Grove gang
+# (multinode.nodeCount: 2): TP8 on NVLink per node, DP2 + EP16 (DeepEP) across the
+# gang over IB. KAI schedules gangs atomically; a broken gang is recreated whole
+# (the LWS RecreateGroupOnPodRestart semantics — a half-alive EP group cannot heal).
+#
+# Flag names follow the doc shape — reconcile against your pinned Dynamo runtime
+# recipe. The LWS rank-wiring flags (--headless, --data-parallel-address /
+# -start-rank / -size-local, the rpc port) are intentionally ABSENT: the Dynamo
+# operator/Grove injects leader address + rank wiring per gang. --host/--port,
+# --served-model-name and --api-server-count belong to the Frontend now.
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: minimax-m27
+  namespace: {{ .Values.namespace }}
+spec:
+  services:
+
+    Frontend:
+      replicas: {{ .Values.frontend.replicas }}
+      extraPodSpec:
+        nodeSelector:
+          {{ .Values.frontend.infraNodeLabel }}: ""
+      mainContainer:
+        args: ["--router-mode", "{{ .Values.frontend.routerMode }}"]
+        resources:
+          requests:
+            cpu: "{{ .Values.frontend.resources.cpu }}"
+            memory: {{ .Values.frontend.resources.memory }}
+
+    MinimaxWorker:
+      replicas: {{ .Values.worker.replicas }}
+      multinode:
+        nodeCount: {{ .Values.worker.nodeCount }}   # the Grove gang = the LWS group
+      labels:
+        app.kubernetes.io/name: minimax-m27
+        kai.scheduler/queue: {{ .Values.queues.interactive }}
+      annotations:
+        {{- if .Values.rails.nads }}
+        k8s.v1.cni.cncf.io/networks: {{ include "minimax.railAnnotation" . }}
+        {{- end }}
+        {{- include "minimax.lowLatencyAnnotations" . | nindent 8 }}
+      extraPodSpec:
+        schedulerName: {{ .Values.scheduler }}
+        runtimeClassName: {{ .Values.runtimeClassName }}   # low-latency pod contract — §3.3
+        priorityClassName: {{ .Values.priorityClasses.interactive }}
+        terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+        nodeSelector:
+          gpu.hpc/sku: {{ .Values.sku.worker }}
+        volumes:
+          - name: models
+            hostPath:
+              path: {{ .Values.modelsHostPath }}
+              type: Directory
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: {{ .Values.worker.dshmSizeLimit }}
+      envs:
+        {{- include "minimax.fabricEnv" . | nindent 8 }}
+      mainContainer:
+        args:
+          - "--model"
+          - "{{ .Values.modelPaths.base }}"
+          - "--tensor-parallel-size"
+          - "{{ .Values.worker.tensorParallel }}"
+          - "--data-parallel-size"
+          - "{{ .Values.worker.dataParallel }}"
+          - "--enable-expert-parallel"
+          - "--kv-cache-dtype"
+          - "{{ .Values.worker.kvCacheDtype }}"
+          - "--gpu-memory-utilization"
+          - "{{ .Values.worker.gpuMemoryUtilization }}"
+          - "--max-model-len"
+          - "{{ .Values.maxModelLen }}"
+          - "--max-num-seqs"
+          - "{{ .Values.worker.maxNumSeqs }}"
+          - "--max-num-batched-tokens"
+          - "{{ .Values.worker.maxNumBatchedTokens }}"
+          - "--enable-prefix-caching"
+          - "--enable-chunked-prefill"
+          - "--enable-auto-tool-choice"
+          - "--tool-call-parser"
+          - "{{ .Values.worker.toolCallParser }}"
+          - "--reasoning-parser"
+          - "{{ .Values.worker.reasoningParser }}"
+          - "--trust-remote-code"
+          - "--speculative-config"
+          - {{ include "minimax.speculativeConfig" . | quote }}
+        # Weight load + CUDA graph capture takes many minutes on first start — the
+        # probe budget reflects that (design §7). IPC_LOCK is NOT added here: RDMA
+        # memory registration is covered by node-foundation's CRI-O memlock=-1 MC.
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: {{ .Values.worker.startupProbe.periodSeconds }}
+          failureThreshold: {{ .Values.worker.startupProbe.failureThreshold }}
+        resources:
+          limits:
+            nvidia.com/gpu: {{ .Values.worker.resources.gpu }}
+            {{- range $name, $count := .Values.rails.resources }}
+            {{ $name }}: "{{ $count }}"
+            {{- end }}
+            cpu: "{{ .Values.worker.resources.cpu }}"
+            memory: {{ .Values.worker.resources.memory }}
+        volumeMounts:
+          - {name: models, mountPath: /models, readOnly: true}
+          - {name: dshm, mountPath: /dev/shm}

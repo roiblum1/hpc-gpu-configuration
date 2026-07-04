@@ -1,9 +1,16 @@
-# GLM-5.1 on OpenShift 4.20 — Helm charts
+# MiniMax M2.7 on OpenShift 4.20 — Helm charts (env/h100-8x-ib)
 
-This repo serves **GLM-5.1** (754B MoE / 40B active) disaggregated on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on Dell XE9680-class HGX nodes (H200 / B200 / B300; 8 GPUs + 8 RoCEv2 rail NICs each). It holds two co-dependent deliverables:
+> **Environment branch `env/h100-8x-ib` — 8× DGX H100, InfiniBand, MiniMax M2.7 + DFlash.**
+> Serving = one Dynamo DGD: 4 wide-EP worker gangs of 2 nodes each (TP8 on NVLink, DP2 + EP16
+> via DeepEP over IB), DFlash speculative decoding (draft: `z-lab/MiniMax-M2.7-DFlash`,
+> mirrored). SR-IOV rails are user-provided (the `sriov-rails` chart is not used). Full delta
+> from `main`: [ENVIRONMENT.md](ENVIRONMENT.md).
 
-1. [glm51-openshift-deployment.md](glm51-openshift-deployment.md) — the **architecture document**: prose rationale, the ordered build sequence, the validation gates, and the cross-layer invariants. **Source of truth.**
-2. [charts/](charts/) — a **Helm chart set that implements the document**, one chart per phase/subject.
+This branch serves **MiniMax M2.7** (230B MoE / 10B active) on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on 8× DGX H100 nodes (8 GPUs + 8 InfiniBand rail NICs each). It holds:
+
+1. [glm51-openshift-deployment.md](glm51-openshift-deployment.md) — the **architecture document** for the phase/gate build discipline and cross-layer invariants (written for the GLM/RoCE mainline; this branch's deltas live in [ENVIRONMENT.md](ENVIRONMENT.md)).
+2. [minimax-m27-dflash-design.md](minimax-m27-dflash-design.md) — this branch's **serving design record**: topology, memory math, survivability, DFlash (original LWS manifest kept in [reference/](reference/)).
+3. [charts/](charts/) — the **Helm chart set**, one chart per phase/subject.
 
 The document is an **ordered build sequence with validation gates** — *do not proceed past a failed gate*. The charts preserve that order. Install them in the sequence below and run each phase's gate (see the source doc) before moving on.
 
@@ -21,20 +28,20 @@ Out-of-band host config that is **not** a chart: [charts/node-foundation/BIOS.md
 
 | Phase | Subject | Chart | Key objects |
 |-------|---------|-------|-------------|
-| 0 | Model staging | [`model-staging`](charts/model-staging) | DaemonSet that pre-stages FP8 + NVFP4 weights to local NVMe |
-| 1 | Kernel tuning / node foundation | [`node-foundation`](charts/node-foundation) | MachineConfigPool, PerformanceProfile, Tuned, CRI-O memlock MC, RoCE QoS systemd MC |
+| 0 | Model staging | [`model-staging`](charts/model-staging) | DaemonSet that pre-stages MiniMax M2.7 + the DFlash draft to local NVMe |
+| 1 | Kernel tuning / node foundation | [`node-foundation`](charts/node-foundation) | MachineConfigPool, PerformanceProfile, Tuned, CRI-O memlock MC (RoCE QoS MC **disabled** — IB fabric) |
 | 2 | GPU | [`gpu-operator`](charts/gpu-operator) | NFD + GPU Operator subscriptions, NodeFeatureDiscovery, ClusterPolicy |
-| 3 | RoCE rails (networking) | [`sriov-rails`](charts/sriov-rails) | SR-IOV operator, 8× SriovNetworkNodePolicy, N×8 SriovNetwork, SriovNetworkPoolConfig |
+| 3 | IB rails (networking) | [`sriov-rails`](charts/sriov-rails) | **Not used on this branch** — IB rail NADs come from the user's own templated config (Gate 3 still applies to them) |
 | 4 | Storage | [`lvms-storage`](charts/lvms-storage) | LVMS operator, LVMCluster (kvcache + models device classes) |
 | — | Certificates (cross-cutting prereq) | [`cert-manager`](charts/cert-manager) | cert-manager operator subscription |
 | 5 | Scheduling | [`kai-scheduler`](charts/kai-scheduler) | KAI upstream (dependency), Queue hierarchy, PriorityClasses |
-| 6 | Serving | [`glm51-dynamo`](charts/glm51-dynamo) | Dynamo platform (dependency), DynamoGraphDeployment interactive + batch lanes |
+| 6 | Serving | [`minimax-dynamo`](charts/minimax-dynamo) | Dynamo platform (dependency), one DGD: KV-router Frontend + 4 wide-EP gangs, worker PDB |
 | 7 | Front door / tenancy | [`gateway-tenancy`](charts/gateway-tenancy) | OSSM3 + Kuadrant subscriptions, Gateway, HTTPRoutes, AuthPolicy, RateLimitPolicy |
 | 8 | Observability | [`observability`](charts/observability) | ServiceMonitors, PrometheusRule alerts, dashboards |
 
 ## Install order
 
-`cert-manager` must exist before `glm51-dynamo` (Dynamo operator webhooks). `gpu-operator` needs NFD first (same chart, ordered). Everything else follows the phase numbering. [`charts/install.sh`](charts/install.sh) is a thin wrapper around `helm upgrade --install` with the right ordering and gate reminders.
+`cert-manager` must exist before `minimax-dynamo` (Dynamo operator webhooks). `gpu-operator` needs NFD first (same chart, ordered). Everything else follows the phase numbering. [`charts/install.sh`](charts/install.sh) is a thin wrapper around `helm upgrade --install` with the right ordering and gate reminders.
 
 ```bash
 charts/install.sh                 # print the ordered plan + the gate to run after each step, then install all
@@ -51,7 +58,7 @@ helm template <chart> | helm lint --strict -   # tighter check
 
 ## The two upstream components (KAI, Dynamo)
 
-`kai-scheduler` and `glm51-dynamo` ship **only our configuration** (queues, priority classes, the DynamoGraphDeployments) so they render and install **standalone** — no network or vendoring needed. The large upstream engines (the KAI scheduler itself; the Dynamo platform = operator + etcd + NATS) are installed **separately**, before our config:
+`kai-scheduler` and `minimax-dynamo` ship **only our configuration** (queues, priority classes, the DynamoGraphDeployment) so they render and install **standalone** — no network or vendoring needed. The large upstream engines (the KAI scheduler itself; the Dynamo platform = operator + etcd + NATS) are installed **separately**, before our config:
 
 - `git clone` / `helm pull` the upstream chart, mirror its images to your registry, and `helm install` it directly (pin etcd/NATS to infra nodes, enable KAI bin-packing/topology placement), **or**
 - vendor it as a subchart: add a `dependencies:` stanza to the chart's `Chart.yaml` pointing at your mirror, drop the chart into `charts/<chart>/charts/`, and run `helm dependency build`.
@@ -62,13 +69,13 @@ The `upstream:` block in each `values.yaml` documents this and carries pass-thro
 
 Several values are repeated across charts and **must stay identical**. They are surfaced at the top of each chart's `values.yaml` with a `# §10` marker. Change them in one place and grep the others (`grep -rn "§10" charts/*/values.yaml`):
 
-- **RoCE QoS: DSCP 26 / traffic-class 106 / GID index 3, CNP DSCP 48 / prio 6** — `node-foundation` (host), `sriov-rails` (VF), `glm51-dynamo` (NCCL/UCX env), switch fabric (PFC/ECN + CNP queue).
-- **MTU 9000** — `node-foundation`, `sriov-rails`, `glm51-dynamo` NADs.
-- **Node role label `gpu-hpc` + SKU label `gpu.hpc/sku`** — `node-foundation`, `gpu-operator`, `sriov-rails`, `lvms-storage`, `glm51-dynamo`.
-- **Reserved CPUs `0-7,56-63`** — `node-foundation` only (consumed implicitly by pod integer CPU requests in `glm51-dynamo`).
-- **KVBM ordering GPU-KV ≤ CPU_CACHE ≤ DISK_CACHE** — `glm51-dynamo` (envs + pod memory) and `lvms-storage` (PVC size).
+- **RoCE QoS triple (DSCP/TC/GID) — not applicable on this branch**: the fabric is InfiniBand; `roceQos` is disabled in `node-foundation` and the NCCL/UCX QoS env is deliberately absent from `minimax-dynamo`.
+- **Node role label `gpu-hpc` + SKU label `gpu.hpc/sku: h100`** — `node-foundation`, `gpu-operator`, `lvms-storage`, `minimax-dynamo`, and the user-provided rail config.
+- **Reserved CPUs `0-7,56-63`** — `node-foundation` only (consumed implicitly by `minimax-dynamo`'s integer `cpu: "96"` = 112 logical − 16 reserved).
+- **Gang size 16 (2 nodes × 8 GPUs)** — `minimax-dynamo` `multinode.nodeCount` ↔ `kai-scheduler` quotas in multiples of 16.
+- **Model dir names** — `model-staging.models[]` ↔ `minimax-dynamo.modelPaths` (`/models/minimax-m2.7`, `/models/minimax-m2.7-dflash`).
 - **One quota brain (KAI) / one router (Dynamo KV router)** — do not add a second scheduler or an endpoint-picker in front of the Dynamo frontend.
-- **Low-latency pod contract** — `glm51-dynamo` workers set `runtimeClassName: performance-gpu-hpc` (NTO generates it from `node-foundation`'s PerformanceProfile name) + `irq-load-balancing.crio.io`/`cpu-quota.crio.io` disable annotations. Rename the profile and the runtime class name must follow.
+- **Low-latency pod contract** — `minimax-dynamo` workers set `runtimeClassName: performance-gpu-hpc` (NTO generates it from `node-foundation`'s PerformanceProfile name) + `irq-load-balancing.crio.io`/`cpu-quota.crio.io` disable annotations. Rename the profile and the runtime class name must follow.
 
 ## What is *not* a chart
 

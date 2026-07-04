@@ -1,0 +1,17 @@
+apiVersion: v2
+name: minimax-dynamo
+description: >-
+  Phase 6 (env/h100-8x-ib) — MiniMax M2.7 + DFlash speculative decoding served on
+  Dynamo + Grove: one DynamoGraphDeployment with a KV-router Frontend and 4 wide-EP
+  worker gangs of 2 DGX H100 nodes each (TP8 on NVLink per node, DP2 + EP16 via DeepEP
+  over InfiniBand). Translation of the LeaderWorkerSet design in
+  ../../minimax-m27-dflash-design.md. The Dynamo platform (operator + etcd + NATS) is
+  the upstream chart (mirror it / git clone for disconnected).
+type: application
+version: 0.1.0
+appVersion: "2.7"
+keywords: [dynamo, grove, vllm, minimax, dflash, deepep, moe, wide-ep, infiniband]
+# Ships ONLY our config (the DynamoGraphDeployment) so it renders standalone. The Dynamo
+# platform (operator + etcd + NATS) is installed separately from its mirrored/cloned chart
+# — see values.yaml `upstream:` and README. To vendor it as a subchart, add a `dependencies:`
+# stanza pointing at your mirror, drop the chart into charts/, and run `helm dependency build`.

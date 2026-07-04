@@ -3,5 +3,5 @@ kind: Namespace
 metadata:
   name: {{ .Values.namespace }}
   labels:
-    # SR-IOV NADs are published into this namespace (sriov-rails chart). §3.2
+    # The user-provided IB rail NADs are published into this namespace. §3.2
     openshift.io/cluster-monitoring: "true"

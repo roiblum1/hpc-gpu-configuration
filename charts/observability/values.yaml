@@ -3,19 +3,23 @@
 # the serving + fabric monitors and the alert rules. Requires User Workload Monitoring enabled.
 
 namespace: openshift-monitoring
-servingNamespace: glm-serving
+servingNamespace: llm-serving
 storageNamespace: openshift-storage
 
 serviceMonitors:
   dynamoFrontend:
     enabled: true
-    namespace: glm-serving
+    namespace: llm-serving
     matchLabels:
       app.kubernetes.io/part-of: dynamo
     port: metrics
     interval: 15s
+  # ENV BRANCH env/h100-8x-ib: DISABLED — the rails are InfiniBand; there are no RoCE
+  # PFC/CNP counters to scrape (and the PFC-pause alert renders only when this is on).
+  # IB fabric health (link flaps, symbol errors, port state) is watched out of band
+  # (UFM / subnet manager); ibstat all-rails-Active is part of Gate 1.
   roceExporter:
-    enabled: true
+    enabled: false
     namespace: openshift-monitoring
     matchLabels:
       app: sriov-network-metrics-exporter
@@ -27,9 +31,9 @@ alerts:
   enabled: true
   gangPendingSeconds: 300        # gang Pending > N min in serving-interactive
   thinPoolPercent: 80            # kvcache thin pool exhaustion is a node-level incident
-  mtpAcceptanceMin: 0.4          # below threshold MTP is pure overhead
+  mtpAcceptanceMin: 0.4          # spec-decode (DFlash/MTP) acceptance — below this, speculation is pure overhead
   prefixHitRateMin: 0.3          # drop = cache thrash
-  pfcPauseSecondsPer5m: 0.001    # any sustained PFC pause = fabric QoS drift
+  pfcPauseSecondsPer5m: 0.001    # RoCE-only alert — renders only if roceExporter is enabled (not on IB)
 
 dashboards:
   enabled: true                  # ConfigMap stub for a "single goodput view" dashboard

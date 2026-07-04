@@ -67,6 +67,10 @@ CRI-O's default memlock limit — the failure surfaces three layers up as crypti
 errors. §10 row (memlock unlimited).
 
 ### RoCE QoS MachineConfig (`roce-qos.sh`, systemd oneshot after network-online)
+**ENV BRANCH env/h100-8x-ib: DISABLED (`roceQos.enabled: false`).** The rails are InfiniBand —
+credit-based lossless, QoS is the fabric's job (SLs / subnet manager); there is no host
+DSCP/PFC/ECN/CNP to pin. The description below is kept as the RoCE reference only.
+
 Pins, per rail PF, identically, every boot: `--trust dscp` (classify on DSCP, not PCP) · PFC
 vector with prio 3 lossless · traffic class **106** = DSCP 26 + ECT bits (the ECN half NCCL/UCX
 must match — §10 triple) · `cma_roce_tos` (RDMA-CM connections get the same TOS) · **CNP marking**
@@ -80,13 +84,13 @@ band and must mirror these values. LLDP/DCBX: keep DCBX **off** in NIC firmware 
 cannot override this script — rationale in [BIOS.md](BIOS.md).
 
 ## Cross-layer invariants this chart carries (§10)
-Role label `gpu-hpc` · reserved CPUs `0-7,56-63` · DSCP 26 / TC 106 (+ CNP 48/6) · MTU 9000 ·
-hugepages small · memlock unlimited · RuntimeClass name `performance-gpu-hpc` (NTO derives it
-from the profile name; `glm51-dynamo` hard-references it).
+Role label `gpu-hpc` · reserved CPUs `0-7,56-63` · (RoCE DSCP/TC/CNP rows not applicable —
+IB fabric, `roceQos` disabled) · hugepages small · memlock unlimited · RuntimeClass name
+`performance-gpu-hpc` (NTO derives it from the profile name; `minimax-dynamo` hard-references it).
 
 ## Gate 1 (do not proceed past failure)
 `/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows
-the child profile · `mlnx_qos` shows trust=dscp + PFC prio 3 · `cnp_dscp` = 48 on every rail ·
-generated KubeletConfig shows `memoryManagerPolicy: Static` (verify, don't assume) ·
-`/proc/interrupts` shows rail-NIC IRQs on local-socket reserved cores · container `ulimit -l` →
-unlimited · after Phase 2: `nvidia-smi topo -m` PIX per GPU↔NIC pair.
+the child profile · `ibstat` shows all 8 compute rails **Active** (a `Polling` rail = dead gang
+member later) · generated KubeletConfig shows `memoryManagerPolicy: Static` (verify, don't
+assume) · `/proc/interrupts` shows rail-NIC IRQs on local-socket reserved cores · container
+`ulimit -l` → unlimited · after Phase 2: `nvidia-smi topo -m` PIX per GPU↔NIC pair.

@@ -1,6 +1,6 @@
 # node-foundation — Phase 1
 
-The host layer for the `gpu-hpc` pool: CPU/NUMA/IRQ isolation, kernel tuning, hugepages, RDMA memlock, and per-boot RoCE NIC QoS. Everything a GPU worker pod needs from the operating system before it can run at line rate.
+The host layer for the `gpu-hpc` pool: CPU/NUMA/IRQ isolation, kernel tuning, hugepages, RDMA memlock. Everything a GPU worker pod needs from the operating system before it can run at line rate. **On this branch (`env/h100-8x-ib`) the RoCE QoS MachineConfig is disabled** — the rails are InfiniBand (credit-based lossless; QoS is the subnet manager's job).
 
 ## Why it matters
 
@@ -12,7 +12,7 @@ This is the layer whose mistakes surface three phases later as "Dynamo is slow."
 - **PerformanceProfile** — reserved/isolated cpusets, `best-effort` NUMA policy, small hugepages, kernel args; NTO generates the KubeletConfig + Tuned + the `performance-gpu-hpc` RuntimeClass from it.
 - **Child Tuned profile** — sysctls the profile doesn't cover (`vm.min_free_kbytes`, swappiness, buffers).
 - **CRI-O memlock MachineConfig** — `memlock=-1:-1` so RDMA registration works in containers.
-- **RoCE QoS MachineConfig** — [roce-qos.sh](files/roce-qos.sh) systemd oneshot pinning trust/PFC/DSCP/CNP/DCQCN/MTU per rail PF, every boot.
+- **RoCE QoS MachineConfig** — **not rendered on this branch** (`roceQos.enabled: false`, IB fabric); [roce-qos.sh](files/roce-qos.sh) stays as the RoCE reference.
 
 > **Every change here reboots the pool node by node.** Batch changes; don't iterate one sysctl at a time on a live fleet.
 
@@ -36,19 +36,17 @@ helm template node-foundation    # inspect PerformanceProfile, Tuned, and the em
 | `performanceProfile.numa.topologyPolicy` | `best-effort` | **Not** `single-numa-node` — full-node pods span both sockets and would be rejected otherwise |
 | `performanceProfile.hugepages` | 16×1G | Small on purpose — KVBM uses CUDA pinned memory, not hugetlbfs |
 | `performanceProfile.additionalKernelArgs` | see values | IOMMU passthrough, NUMA-balancing off, C-state/ASPM/RCU latency args. **Never** hand-add isolcpus/nohz_full — NTO generates them |
-| `performanceProfile.globallyDisableIrqLoadBalancing` | `false` | Per-pod IRQ exclusion instead (the `glm51-dynamo` RuntimeClass contract). §10 |
-| `crioMemlock.enabled` | `true` | memlock unlimited for ibverbs. §10 |
-| `roceQos.trafficClass` | `106` | DSCP 26 + ECN. Must match switch + pod env. §10 |
-| `roceQos.cnpDscp` / `cnpPriority` | `48` / `6` | CNP marking — switch CNP queue mirrors this. §10 |
-| `roceQos.pfcPriority` / `mtu` | `3` / `9000` | Lossless priority; MTU end-to-end. §10 |
+| `performanceProfile.globallyDisableIrqLoadBalancing` | `false` | Per-pod IRQ exclusion instead (the `minimax-dynamo` RuntimeClass contract). §10 |
+| `crioMemlock.enabled` | `true` | memlock unlimited for ibverbs (this covers the LWS manifest's `IPC_LOCK`). §10 |
+| `roceQos.enabled` | **`false`** | IB fabric — no host DSCP/PFC/ECN/CNP; the remaining `roceQos.*` values are the dormant RoCE reference |
 
 ## PFC / ECN / LLDP, in one place
 
-**All host-side PFC/ECN/DCQCN is this chart's RoCE QoS MachineConfig** — trust=dscp, the PFC prio-3 vector, TC 106 (DSCP 26 + ECT bits), CNP DSCP 48/prio 6, the DCQCN NP/RP enables (that pair *is* host-side "ECN activation"), global pause off, MTU 9000. The switch does the WRED/ECN *marking* (out of band, must mirror these). **Keep DCBX-over-LLDP off in NIC firmware** ([BIOS.md](BIOS.md)) so this MachineConfig is the single owner of the NIC's QoS.
+**Not on InfiniBand.** PFC/ECN/DCQCN/DCBX are RoCE machinery (making lossy Ethernet lossless); IB is lossless by credit-based flow control, and its QoS lives in the fabric (SLs / subnet manager). That is why `roceQos.enabled: false` here and why the mlxconfig DCBX rows in [BIOS.md](BIOS.md) don't apply to IB-mode CX-7s. The QoS gate check is replaced by: `ibstat` shows all compute rails **Active**.
 
 ## Gate 1 (do not proceed past failure)
 
-`/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows the child profile · `mlnx_qos` shows trust=dscp + PFC prio 3 · `cnp_dscp` = 48 on every rail · generated KubeletConfig shows `memoryManagerPolicy: Static` · `/proc/interrupts` shows rail-NIC IRQs on local-socket reserved cores · container `ulimit -l` → unlimited · (after Phase 2) `nvidia-smi topo -m` PIX per GPU↔NIC pair.
+`/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows the child profile · `ibstat` shows all 8 compute rails **Active** (not `Polling`) · generated KubeletConfig shows `memoryManagerPolicy: Static` · `/proc/interrupts` shows rail-NIC IRQs on local-socket reserved cores · container `ulimit -l` → unlimited · (after Phase 2) `nvidia-smi topo -m` PIX per GPU↔NIC pair.
 
 ## See also
 

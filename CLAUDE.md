@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Environment branch `env/h100-8x-ib`** — 8× DGX H100, **InfiniBand**, **MiniMax M2.7 +
+> DFlash** on Dynamo + Grove (chart `minimax-dynamo` replaces `glm51-dynamo`; `sriov-rails`
+> unused — rails are user-provided; `roceQos` disabled). Read [ENVIRONMENT.md](ENVIRONMENT.md)
+> and [minimax-m27-dflash-design.md](minimax-m27-dflash-design.md) before editing — where they
+> and the GLM architecture doc disagree, this environment follows them.
+
 ## What this repository is
 
 This repo holds **two co-dependent deliverables** for serving **GLM-5.1** (754B MoE / 40B active) on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on Dell XE9680-class HGX nodes (H200 / B200 / B300, 8 GPUs + 8 RoCEv2 rail NICs each):

@@ -9,7 +9,7 @@ deployment doc §0 stay authoritative.
 ([files/stage-weights.sh](files/stage-weights.sh)) and ConfigMap.
 
 **Does NOT own:** the `models` LV / filesystem it writes into (→ `lvms-storage` optional class,
-or an out-of-band LV) · consumption of the weights (→ `glm51-dynamo` mounts
+or an out-of-band LV) · consumption of the weights (→ `minimax-dynamo` mounts
 `hostPath: /var/lib/models` read-only) · registry mirroring itself (Phase 0, out of band).
 
 ## Why each configuration is what it is
@@ -18,10 +18,10 @@ or an out-of-band LV) · consumption of the weights (→ `glm51-dynamo` mounts
   future** GPU node must hold the weights before a worker can start there. A DaemonSet
   reconciles new nodes automatically; a Job would need re-running on every scale-up. The pod
   stays Running (`sleep infinity`) after staging so its status doubles as per-node evidence.
-- **Why not just pull weights inside the serving image:** 754 GB through image pulls serializes
-  on CRI-O's layer-extraction lock, and every pod restart pays the pull again. Staging once per
-  node makes worker restarts cost **zero** pull time — this is the doc's "do not serve 754 GB
-  through image pulls" rule.
+- **Why not just pull weights inside the serving image:** a ~230 GB checkpoint through image
+  pulls serializes on CRI-O's layer-extraction lock, and every pod restart — including every
+  atomic gang recreate — pays the pull again. Staging once per node makes gang restarts cost
+  **zero** pull time — this is the doc's "do not serve weights through image pulls" rule.
 - **`hostPath: /var/lib/models`** — dedicated `models` LV, *separate from the KV-cache LV* so
   KVBM disk-tier churn and weight storage never compete for the same thin pool. Workers mount it
   read-only; the DaemonSet is the only writer.
@@ -32,16 +32,16 @@ or an out-of-band LV) · consumption of the weights (→ `glm51-dynamo` mounts
   model dir ships a `sha256sum.txt` (generate it at mirror time), the script verifies it on
   every (re)stage — that is Gate 0's "staged **and checksummed**" evidence. No manifest = loud
   warning, not silent pass.
-- **Both quantizations** (`glm-5.1-fp8`, `glm-5.1-nvfp4`) are staged on every node even though
-  prefill uses FP8 (H200) and decode NVFP4 (Blackwell) — the few hundred GB of "wrong-SKU"
-  weights buy pool-role flexibility (a node can be re-labeled between pools without a re-stage).
-  Directory names must match `glm51-dynamo`'s `modelPaths` (`/models/<name>`).
+- **Base model + DFlash draft** (`minimax-m2.7`, `minimax-m2.7-dflash` — the z-lab mirror) are
+  staged on every node: the draft is small next to the 230 GB base, and any node must be able
+  to host a recreated gang without a re-stage. Directory names must match `minimax-dynamo`'s
+  `modelPaths` (`/models/<name>`).
 - **Tiny resources** (2 CPU / 4 Gi): the pod is I/O-bound; keep it schedulable on busy nodes and
   harmless on the reserved-CPU budget.
 
 ## Cross-layer invariants this chart carries
-`roleLabel: gpu-hpc` (runs exactly on GPU nodes) · `hostPath` ↔ `glm51-dynamo.modelsHostPath` ·
-model dir names ↔ `glm51-dynamo.modelPaths` · image + refs pinned by digest per Phase 0.
+`roleLabel: gpu-hpc` (runs exactly on GPU nodes) · `hostPath` ↔ `minimax-dynamo.modelsHostPath` ·
+model dir names ↔ `minimax-dynamo.modelPaths` · image + refs pinned by digest per Phase 0.
 
 ## Gate 0 (do not proceed past failure)
 All images resolvable by digest from a GPU node; every DaemonSet pod Running with "all models

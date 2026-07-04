@@ -1,0 +1,121 @@
+# Phase 6 — MiniMax M2.7 + DFlash on Dynamo + Grove. ENV BRANCH env/h100-8x-ib:
+# 8× DGX H100 over InfiniBand. Rationale: ../../minimax-m27-dflash-design.md; the
+# LWS original this chart translates: ../../reference/minimax-m27-dflash-lws.yaml.
+#
+# Topology: 4 worker gangs × 2 nodes = exactly 8 DGX H100. TP8 on NVLink inside each
+# node; DP2 + --enable-expert-parallel across the gang => experts sharded EP16-wide,
+# MoE all-to-all over IB via DeepEP. Attention/KV stay node-local. A node loss kills
+# exactly ONE gang — the other 3 keep serving at 75% capacity (design §5).
+
+namespace: llm-serving
+maxModelLen: 196608          # 192K context
+
+# Staged weights (Phase 0, model-staging chart): base model + the DFlash draft
+# (mirror of z-lab/MiniMax-M2.7-DFlash). Dir names must match model-staging models[].
+modelPaths:
+  base: /models/minimax-m2.7
+  dflashDraft: /models/minimax-m2.7-dflash
+modelsHostPath: /var/lib/models   # node path staged by the model-staging chart
+
+# Rail attachments — USER-PROVIDED IB rail NADs (the sriov-rails chart is not used on
+# this branch). Entries go verbatim into k8s.v1.cni.cncf.io/networks; prefix with
+# "<ns>/" if your NADs live outside .namespace. GPU n <-> rail n PCIe pairing still
+# emerges by construction: full-node pod + NCCL PCIe-topology walk + NCCL_CROSS_NIC=0.
+rails:
+  nads: [ib-rail1, ib-rail2, ib-rail3, ib-rail4, ib-rail5, ib-rail6, ib-rail7, ib-rail8]
+  # Device-plugin resources injected into every worker — match YOUR rail pool names.
+  # One pooled resource (below) or eight per-rail pools both work.
+  resources:
+    rdma/ib: "8"
+
+# IB fabric + engine env. NOTE what is deliberately ABSENT vs main: NCCL_IB_TC and the
+# GID index are RoCE QoS knobs — InfiniBand is credit-based lossless and QoS lives in
+# the fabric (SLs / subnet manager), not on the host. No UCX/NIXL block either: there
+# is no disaggregation, so nothing transfers KV between pools.
+fabric:
+  # Compute rails ONLY — exclude storage/north-south HCAs or NCCL happily registers
+  # QPs on the storage fabric (design §3).
+  ncclIbHca: "mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7"
+  socketIfname: eth0           # bootstrap/control path on the pod net, never on rails
+  ncclIbTimeout: "22"          # generous on purpose: with EP spanning nodes, ride out a
+  ncclIbRetryCnt: "13"         #   link flap instead of aborting the communicator (= the gang)
+  ncclIbQpsPerConnection: "4"
+  all2allBackend: deepep_low_latency   # decode-optimized EP all-to-all (NVSHMEM/IBGDA over the rails)
+  useDeepGemm: "1"             # vLLM MiniMax recipe on Hopper — verify env name for your build
+
+# Low-latency pod contract (§3.3 / §10): NTO generates RuntimeClass performance-<name>
+# from node-foundation's performanceProfile.name. Must track that chart's profile name.
+runtimeClassName: performance-gpu-hpc
+
+# Scheduling identity — one quota brain (KAI). §5 / §10. Gang fabric-adjacency (the LWS
+# exclusive-topology annotation) is KAI's job here: enable network-topology-aware
+# placement in the kai-scheduler upstream values so gangs never pay a spine hop.
+scheduler: kai-scheduler
+queues:
+  interactive: serving-interactive
+priorityClasses:
+  interactive: serving-critical
+
+sku:
+  worker: h100                 # gpu.hpc/sku node label — all 8 nodes are DGX H100
+
+# Dynamo platform (operator + etcd + NATS). Pin etcd/NATS to infra nodes (chart values),
+# never GPU nodes. Off by default — mirror the chart / git clone into ./charts for disconnected.
+upstream:
+  install: false
+
+frontend:
+  replicas: 2                 # CPU pods on infra nodes; OpenAI API + tokenizer + router
+  routerMode: kv              # KV/prefix-aware routing — THE inference router; replaces the
+                              # LWS design's plain leader Service. §7: do not add a 2nd router
+  infraNodeLabel: node-role.kubernetes.io/infra
+  port: 8000
+  resources:
+    cpu: "16"
+    memory: 64Gi
+
+worker:
+  replicas: 4                 # 4 gangs × nodeCount 2 = exactly 8 DGX H100
+  nodeCount: 2                # the Grove gang = the LWS group; KAI schedules it atomically. §5
+  tensorParallel: 8           # intra-node, NVLink/NVSwitch — the fabric never carries TP
+  dataParallel: 2             # one DP rank per gang node; with EP => EP16 across the gang
+  kvCacheDtype: fp8_e4m3
+  gpuMemoryUtilization: "0.90"
+  maxNumSeqs: 128             # sized to the wide-EP KV budget (~57-60 GB/GPU, design §2) —
+                              # tune against observed gpu_cache_usage_perc
+  maxNumBatchedTokens: 8192
+  toolCallParser: minimax_m2
+  reasoningParser: minimax_m2_append_think
+  terminationGracePeriodSeconds: 180
+  startupProbe:
+    periodSeconds: 15
+    failureThreshold: 160     # up to ~40 min: weight load + CUDA graph capture — don't tighten
+  dshmSizeLimit: 512Gi        # /dev/shm for intra-node worker IPC
+  resources:
+    gpu: 8
+    cpu: "96"                 # integer, requests==limits -> Guaranteed -> exclusive pcpus
+                              # (112 logical, SMT off, minus 16 reserved = 96)
+    memory: 1500Gi
+
+# Speculative decoding — DFlash by DEFAULT: this 8-node env is the DFlash environment,
+# draft = z-lab/MiniMax-M2.7-DFlash staged at modelPaths.dflashDraft. High K is right
+# for DFlash (all K draft tokens cost ONE forward, unlike EAGLE-style drafting).
+# disable_by_batch_size makes the diurnal pattern self-managing: speculation active at
+# night (small batches, bandwidth-bound), silently off at daytime peak (compute-bound),
+# where wide-EP's KV headroom does the work instead (design §6).
+# Zero-artifact fallback (native MTP heads in the checkpoint): method: mtp.
+speculative:
+  method: dflash              # dflash | mtp
+  numSpeculativeTokens: 8     # used by dflash
+  draftTensorParallelSize: 1  # keep the small draft on one GPU per rank
+  mtpNumSpeculativeTokens: 3  # used by mtp
+  disableByBatchSize: 32      # verify the exact key against your vLLM version — it has moved
+
+# Voluntary disruptions: never drain more than one node (= one gang, RecreateGroup
+# semantics) at a time; with a gang already down, further drains block. This is the LWS
+# design's PDB intent at pod granularity. NOTE: assumes the operator/Grove propagates
+# the service labels onto worker pods — verify rendered pods carry
+# app.kubernetes.io/name=minimax-m27 before trusting a drain to it.
+pdb:
+  enabled: true
+  maxUnavailable: 1

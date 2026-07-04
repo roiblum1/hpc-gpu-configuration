@@ -34,9 +34,12 @@ RoCE metrics exporter** (see the honest gap below).
   - `gangPendingSeconds: 300` — interactive gangs Pending this long means quota/capacity drift,
     not scheduling noise.
 - **`dynamoFrontend` monitor** scrapes the frontend's OpenAI-metrics + router stats in
-  `glm-serving`; **`roceExporter`** scrapes per-rail NIC counters (`out_of_buffer`, CNPs
-  sent/handled, PFC pause duration) — the per-rail granularity is what makes "which rail is
-  sick" answerable.
+  `llm-serving` — on this branch that includes the **spec-decode acceptance** signal
+  (`mtpAcceptanceMin` watches DFlash) and DeepEP dispatch latency, the two numbers that decide
+  whether the wide-EP topology earns its keep (design §7).
+- **`roceExporter` is DISABLED on this branch** (IB fabric — no PFC/CNP counters exist; the
+  PFC-pause alert renders only when the exporter is enabled). IB fabric health is watched out
+  of band (UFM / subnet manager); `ibstat` all-rails-Active is Gate 1's check.
 
 ## Honest gap — the RoCE exporter is assumed, not shipped
 
@@ -47,7 +50,7 @@ then make the labels here match. Until then, the fabric alerts are silently blin
 ServiceMonitor selects zero endpoints and Prometheus reports nothing, including no error.
 
 ## Cross-layer invariants this chart carries
-Scrape labels ↔ what `glm51-dynamo`/exporters actually expose (a renamed port kills a control
+Scrape labels ↔ what `minimax-dynamo`/exporters actually expose (a renamed port kills a control
 loop silently) · alert thresholds ↔ §8 minimums · DCGM ownership stays in `gpu-operator`.
 
 ## Gate 8 — the 72h soak (the whole build's exit gate)

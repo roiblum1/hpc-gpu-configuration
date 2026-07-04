@@ -1,0 +1,16 @@
+{{- if .Values.pdb.enabled }}
+# Never let voluntary disruptions (drain/maintenance) take more than one worker pod
+# — and therefore more than one gang (RecreateGroup semantics) — down at a time.
+# With a gang already broken (node failure), further drains block until it heals:
+# the LWS design's "never a second group while one is out" rule (design §5).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minimax-m27-workers
+  namespace: {{ .Values.namespace }}
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minimax-m27
+{{- end }}

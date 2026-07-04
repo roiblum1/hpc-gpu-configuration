@@ -24,8 +24,9 @@ disagreeing about placement destroys KV-locality routing.
 - **Lane selection by hostname** (`llm.` interactive / `llm-batch.` batch), not by header or
   path: Gateway API policies attach naturally per-route/per-hostname, clients can't
   accidentally lane-hop, and the batch lane can be firewalled/budgeted independently. Each
-  HTTPRoute backends the matching Dynamo **frontend** Service (`glm51-frontend` /
-  `glm51-batch-frontend` — names must track the DGD names in `glm51-dynamo`).
+  HTTPRoute backends the Dynamo **frontend** Service. On this branch there is ONE DGD and one
+  frontend (`minimax-m27-frontend` — must track the DGD name in `minimax-dynamo`): both
+  hostnames route to it, and the per-lane token budgets still bite per tenant/lane.
 - **`gatewayClassName: openshift-default`** — OCP 4.20 GA Gateway API (Istio/OSSM3-based); the
   OSSM3 subscription in this chart is what provides it. No OperatorGroup for it:
   `openshift-operators` already has a global one (a second OperatorGroup in a namespace breaks
@@ -48,7 +49,7 @@ disagreeing about placement destroys KV-locality routing.
 
 ## Cross-layer invariants this chart carries (§10)
 No endpoint picking in front of the Dynamo frontend (single-brain #2) · backend Service names ↔
-`glm51-dynamo` DGD/frontend naming · hostnames ↔ tenant docs/clients · token budgets ↔ §8
+`minimax-dynamo` DGD/frontend naming · hostnames ↔ tenant docs/clients · token budgets ↔ §8
 per-tenant observability (budgets you can't measure are budgets you can't enforce).
 
 ## Gate 7 (do not proceed past failure)
