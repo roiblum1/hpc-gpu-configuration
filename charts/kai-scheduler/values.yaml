@@ -14,14 +14,15 @@ upstream:
 #     networkTopologyAware: true
 
 # Queue hierarchy (scheduling.run.ai/v2). Quotas in GPU counts; quota=-1 means unbounded.
-# Keep quotas in multiples of the EP group size (= multinode.nodeCount x 8) so gangs fit cleanly.
+# Keep quotas in multiples of the gang size (= multinode.nodeCount x 8) so gangs fit cleanly.
+# ENV BRANCH env/h200-2x-roce: 2 nodes x 8 = 16 GPUs total; gang size 8 (single-node replicas).
 queues:
   root:
     name: org
   interactive:
     name: serving-interactive
     priority: 100
-    gpu: {quota: 64, limit: 96, overQuotaWeight: 3}   # guaranteed floor = SLO capacity
+    gpu: {quota: 16, limit: 16, overQuotaWeight: 3}   # guaranteed floor = SLO capacity (= whole env)
   batch:
     name: serving-batch
     priority: 50

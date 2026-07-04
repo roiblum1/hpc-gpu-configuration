@@ -1,14 +1,14 @@
-# glm51-dynamo — Phase 6
+# glm51-dynamo — Phase 6 (env/h200-2x-roce: aggregated)
 
-The GLM-5.1 serving deployment itself: two `DynamoGraphDeployment`s (an interactive lane and an optional batch lane) running disaggregated prefill + decode with KV-aware routing, KVBM tiering, and the low-latency pod contract.
+The GLM-5.1 serving deployment for the **2× HGX H200** environment: two `DynamoGraphDeployment`s (an interactive lane and an optional batch lane) running **aggregated** single-node TP8/FP8 replicas behind the KV-aware router.
 
-## Why it matters
+## Why aggregated here (the branch's structural change)
 
-This is where the whole stack becomes a served model. It encodes the load-bearing serving decisions — disaggregation (H200/FP8 prefill ↔ Blackwell/NVFP4 decode), KVBM on prefill so decode keeps CUDA graphs, the KVBM tier-size ordering, and the per-pod IRQ/RuntimeClass contract that keeps rail-NIC interrupts off the pinned cores. It's **config only**: the Dynamo platform (operator + etcd + NATS) is upstream.
+Main disaggregates (H200 prefill ↔ Blackwell decode); this environment has **no Blackwell nodes**, so each H200 node is one *complete* engine instead. GLM-5.1 FP8 (~754 GB) fits one node's 1128 GB HBM with ~250–300 GB left as KV. Two independent replicas mean **losing a node keeps 50% capacity serving** — a 1-prefill + 1-decode split would instead stop entirely on either node's loss. It's still **config only**: the Dynamo platform (operator + etcd + NATS) is upstream.
 
 ## What it deploys
 
-- **Interactive DGD** — Frontend (KV router, on infra nodes) + `GLM51Prefill` (H200/FP8/TP8, KVBM) + `GLM51Decode` (Blackwell/NVFP4, wide-EP, CUDA graphs + MTP).
+- **Interactive DGD** — Frontend (KV router, on infra nodes) + `GLM51Worker` (2 replicas × 1 node, TP8, FP8, chunked prefill, 1 MTP head).
 - **Batch DGD** (optional) — a smaller clone: same model + weights LV, queue `serving-batch`, preemptible, MTP off.
 - The serving namespace.
 
@@ -16,7 +16,7 @@ The **Dynamo platform is upstream** and off by default (`upstream.install: false
 
 ## Prerequisites & position
 
-Last of the compute phases — needs node-foundation (RuntimeClass), gpu-operator, sriov-rails (rails), lvms-storage (KV PVC), cert-manager (Dynamo webhooks), and kai-scheduler (queues). The front door is Phase 7.
+Last of the compute phases — needs node-foundation (RuntimeClass), gpu-operator, **user-provided rails** (the `sriov-rails` chart is not used on this branch), lvms-storage, cert-manager (Dynamo webhooks), and kai-scheduler (queues). The front door is Phase 7.
 
 ## How to use
 
@@ -30,26 +30,25 @@ helm template glm51-dynamo       # inspect both DGDs (interactive + batch)
 | Value | Default | What it does |
 |-------|---------|--------------|
 | `frontend.routerMode` | `kv` | **THE** inference router (KV/prefix-aware). Nothing may endpoint-pick in front of it. §10 |
-| `frontend.replicas` | `4` | CPU pods on **infra** nodes (never GPU-node reserved cores) |
-| `prefill` | H200 / FP8 / TP8 / KVBM | Compute-bound pool; TP8 stays intra-node on NVLink; KVBM anchored here |
-| `prefill.kvbm.cpuCacheGb` / `diskCacheGb` | `1024` / `2048` | KVBM tiers — ordering **GPU-KV ≤ CPU ≤ DISK** is a write-through invariant. §10 |
-| `prefill.kvbm.initTimeoutSecs` | `1200` | Pinning ~1 TB takes minutes — default timeout would kill workers mid-init |
-| `prefill.diskPvc.size` | `2200Gi` | Must be ≥ `diskCacheGb`; on the LVMS kvcache class. §10 |
-| `decode` | Blackwell / NVFP4 / DP16 | Memory-bandwidth-bound; `nodeCount: 2` → each replica a Grove gang KAI schedules atomically |
-| `decode.speculativeTokens` | `1` | One MTP head — **interactive only** (batch lane MTP off) |
+| `frontend.replicas` | `2` | CPU pods on **infra** nodes (never GPU-node reserved cores) |
+| `worker.replicas` / `nodeCount` | `2` / `1` | One full node per replica — the whole environment; single-node gangs |
+| `worker.tensorParallel` | `8` | TP8 stays intra-node on NVLink — the fabric carries no TP/EP |
+| `worker.speculativeTokens` | `1` | One MTP head — **interactive only** (batch lane MTP off) |
+| `worker.kvbm.enabled` | `false` | KVBM disables CUDA graphs, and here the decode hot loop shares the engine — enable only if session park/resume outweighs decode ITL. Tier ordering + PVC sizing rules (§10) apply when on |
+| `rails` | `rail0..rail7` | NAD names from the **user-provided** rail config. Carry no serving traffic in this shape (kept for fleet parity); set `[]` to detach |
 | `runtimeClassName` | `performance-gpu-hpc` | Hard reference to the NTO-generated class — rename the PerformanceProfile and this must follow. §10 |
-| `fabric.trafficClass` / `gidIndex` | `106` / `3` | NCCL/UCX must equal host QoS or they ride the lossy queue. §10 |
-| `sku.prefill` / `sku.decode` | `h200` / `b200` | Node-label SKU mapping. A **B300 pool is a separate DGD release** — never mix in one EP group |
-| `batchLane.enabled` | `true` | The preemptible second DGD |
+| `fabric.trafficClass` / `gidIndex` | `106` / `3` | Must equal host QoS if rail traffic ever exists. §10 |
+| `sku.worker` | `h200` | Single SKU — both nodes are H200 |
+| `batchLane.enabled` | `true` | The preemptible second DGD (1 worker replica) |
 
 ## GPU↔NIC alignment (the common question)
 
-Kubernetes can only align at **NUMA-node granularity** — device plugins report a GPU's and a VF's socket, and Topology Manager co-locates them per socket; "GPU 3 must get rail 3's VF" is inexpressible in the kubelet API. This design gets exact pairing anyway **by construction**: the pod takes the **whole node** (all 8 GPUs + 8 VFs), and inside it NCCL/UCX walk the PCIe topology and pick, per GPU, the closest NIC (same PCIe switch, PIX). `NCCL_CROSS_NIC=0` forbids fallback; per-rail L3 segments make cross-rail traffic unroutable. **A 1-GPU pod has no such guarantee** — that needs a `single-numa-node` pool (socket-level) or DRA with device-attribute selectors (exact). See [CLAUDE.md](CLAUDE.md) for the full treatment.
+Unchanged from main in mechanism: the pod takes the **whole node** (8 GPUs + 8 VFs) and NCCL/UCX walk the PCIe topology for exact pairing — but note that in the aggregated shape no serving traffic crosses the rails at all (TP8 is NVLink-internal, there is no NIXL path). See [CLAUDE.md](CLAUDE.md).
 
 ## Gate 6 (do not proceed past failure)
 
-`genai-perf` sweep meets TTFT/ITL per lane · disagg verified (NIXL counters move; decode never prefilling long prompts) · session park/resume: resume TTFT ≪ initial prefill, KVBM onboard counters account for it · `numastat -p <engine pid>`: pinned CPU tier split across **both** sockets.
+`genai-perf` sweep meets TTFT/ITL per lane · KV router spreads sessions with prefix locality across **both** replicas · node kill test: surviving replica keeps serving, router drains the dead one · `numastat -p <engine pid>`: engine memory split across **both** sockets.
 
 ## See also
 
-[CLAUDE.md](CLAUDE.md) — why-each-decision guidance (incl. the full GPU↔NIC alignment and KVBM/CUDA-graph rationale).
+[CLAUDE.md](CLAUDE.md) — why-each-decision guidance. [../../ENVIRONMENT.md](../../ENVIRONMENT.md) — the full branch delta.

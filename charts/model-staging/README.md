@@ -31,10 +31,10 @@ helm template model-staging      # inspect the rendered DaemonSet + script
 | `image` | `<your-registry>/tools/skopeo:latest` | Image with `skopeo` (+ `rsync`), from your mirror |
 | `source.type` | `oci` | `oci` (skopeo from mirror, by digest) or `rsync` (artifact server) |
 | `source.registry` / `source.rsyncBase` | placeholder | Where staged weights come from |
-| `models[]` | `glm-5.1-fp8`, `glm-5.1-nvfp4` | Dir names — must match `glm51-dynamo.modelPaths`; refs pinned **by digest** |
+| `models[]` | `glm-5.1-fp8` | Dir names — must match `glm51-dynamo.modelPaths`; refs pinned **by digest** |
 | `resources` | 2 CPU / 4 Gi | I/O-bound; kept small so it stays schedulable and harmless to the reserved-CPU budget |
 
-**Both quantizations** are staged on every node even though prefill uses FP8 and decode NVFP4 — the extra weights buy pool-role flexibility (re-label a node between pools with no re-stage).
+**FP8 only on this branch** (`env/h200-2x-roce`): with no Blackwell nodes, the NVFP4 decode quantization has no consumer — staging it would waste NVMe on every node.
 
 ## Gate 0 (do not proceed past failure)
 

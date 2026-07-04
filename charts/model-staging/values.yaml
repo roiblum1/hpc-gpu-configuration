@@ -1,5 +1,6 @@
 # Phase 0 — model weight staging. Source: §0.
-# Mirror BOTH quantizations: FP8 (prefill/H200) and NVFP4 (decode/Blackwell).
+# ENV BRANCH env/h200-2x-roce: FP8 only — this environment has no Blackwell
+# nodes, so the NVFP4 decode quantization is not mirrored or staged.
 # Worker pods (glm51-dynamo) mount hostPath:{{ hostPath }} read-only.
 
 roleLabel: gpu-hpc
@@ -16,8 +17,7 @@ source:
 
 # Local dir name -> matches glm51-dynamo modelPaths (/models/<name>).
 models:
-  - {name: glm-5.1-fp8,   ref: "glm-5.1-fp8@sha256:REPLACE"}
-  - {name: glm-5.1-nvfp4, ref: "glm-5.1-nvfp4@sha256:REPLACE"}
+  - {name: glm-5.1-fp8, ref: "glm-5.1-fp8@sha256:REPLACE"}
 
 resources:
   requests: {cpu: "2", memory: 4Gi}

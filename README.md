@@ -1,5 +1,10 @@
 # GLM-5.1 on OpenShift 4.20 — Helm charts
 
+> **Environment branch `env/h200-2x-roce` — 2× HGX H200, RoCEv2, GLM-5.1 FP8 aggregated.**
+> No Blackwell decode pool exists here, so main's disaggregation is replaced by **2 aggregated
+> single-node TP8 replicas** behind the Dynamo KV router. SR-IOV rails are user-provided
+> (the `sriov-rails` chart is not used). Full delta from `main`: [ENVIRONMENT.md](ENVIRONMENT.md).
+
 This repo serves **GLM-5.1** (754B MoE / 40B active) disaggregated on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on Dell XE9680-class HGX nodes (H200 / B200 / B300; 8 GPUs + 8 RoCEv2 rail NICs each). It holds two co-dependent deliverables:
 
 1. [glm51-openshift-deployment.md](glm51-openshift-deployment.md) — the **architecture document**: prose rationale, the ordered build sequence, the validation gates, and the cross-layer invariants. **Source of truth.**
@@ -21,10 +26,10 @@ Out-of-band host config that is **not** a chart: [charts/node-foundation/BIOS.md
 
 | Phase | Subject | Chart | Key objects |
 |-------|---------|-------|-------------|
-| 0 | Model staging | [`model-staging`](charts/model-staging) | DaemonSet that pre-stages FP8 + NVFP4 weights to local NVMe |
+| 0 | Model staging | [`model-staging`](charts/model-staging) | DaemonSet that pre-stages the FP8 weights to local NVMe (FP8 only on this branch) |
 | 1 | Kernel tuning / node foundation | [`node-foundation`](charts/node-foundation) | MachineConfigPool, PerformanceProfile, Tuned, CRI-O memlock MC, RoCE QoS systemd MC |
 | 2 | GPU | [`gpu-operator`](charts/gpu-operator) | NFD + GPU Operator subscriptions, NodeFeatureDiscovery, ClusterPolicy |
-| 3 | RoCE rails (networking) | [`sriov-rails`](charts/sriov-rails) | SR-IOV operator, 8× SriovNetworkNodePolicy, N×8 SriovNetwork, SriovNetworkPoolConfig |
+| 3 | RoCE rails (networking) | [`sriov-rails`](charts/sriov-rails) | **Not used on this branch** — rails come from the user's own templated config (Gate 3 still applies to them) |
 | 4 | Storage | [`lvms-storage`](charts/lvms-storage) | LVMS operator, LVMCluster (kvcache + models device classes) |
 | — | Certificates (cross-cutting prereq) | [`cert-manager`](charts/cert-manager) | cert-manager operator subscription |
 | 5 | Scheduling | [`kai-scheduler`](charts/kai-scheduler) | KAI upstream (dependency), Queue hierarchy, PriorityClasses |

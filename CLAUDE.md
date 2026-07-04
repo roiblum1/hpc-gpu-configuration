@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Environment branch `env/h200-2x-roce`** — 2× HGX H200, RoCEv2, GLM-5.1 FP8 **aggregated**
+> (no Blackwell → no disaggregation; `sriov-rails` unused, rails are user-provided). Read
+> [ENVIRONMENT.md](ENVIRONMENT.md) before editing — where it and the architecture doc disagree,
+> this environment follows ENVIRONMENT.md.
+
 ## What this repository is
 
 This repo holds **two co-dependent deliverables** for serving **GLM-5.1** (754B MoE / 40B active) on **disconnected, bare-metal OpenShift 4.20** (K8s 1.33), on Dell XE9680-class HGX nodes (H200 / B200 / B300, 8 GPUs + 8 RoCEv2 rail NICs each):

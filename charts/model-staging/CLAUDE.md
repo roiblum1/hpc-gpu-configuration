@@ -32,10 +32,10 @@ or an out-of-band LV) · consumption of the weights (→ `glm51-dynamo` mounts
   model dir ships a `sha256sum.txt` (generate it at mirror time), the script verifies it on
   every (re)stage — that is Gate 0's "staged **and checksummed**" evidence. No manifest = loud
   warning, not silent pass.
-- **Both quantizations** (`glm-5.1-fp8`, `glm-5.1-nvfp4`) are staged on every node even though
-  prefill uses FP8 (H200) and decode NVFP4 (Blackwell) — the few hundred GB of "wrong-SKU"
-  weights buy pool-role flexibility (a node can be re-labeled between pools without a re-stage).
-  Directory names must match `glm51-dynamo`'s `modelPaths` (`/models/<name>`).
+- **FP8 only on this branch** (`env/h200-2x-roce`). Main stages both quantizations for
+  pool-role flexibility; here there is no Blackwell pool, so `glm-5.1-nvfp4` has no consumer
+  and is deliberately not mirrored or staged. Directory names must match `glm51-dynamo`'s
+  `modelPaths` (`/models/<name>`).
 - **Tiny resources** (2 CPU / 4 Gi): the pod is I/O-bound; keep it schedulable on busy nodes and
   harmless on the reserved-CPU budget.
 

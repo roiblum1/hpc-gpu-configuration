@@ -1,21 +1,29 @@
-# Phase 6 — GLM-5.1 on Dynamo. Source: §6 / §10.
-# Heterogeneity is a feature: prefill = H200/FP8/TP8, decode = Blackwell/NVFP4/wide-EP.
+# Phase 6 — GLM-5.1 on Dynamo. Source: §6 / §10 + ../../ENVIRONMENT.md.
+# ENV BRANCH env/h200-2x-roce: 2× HGX H200, NO Blackwell decode pool — main's
+# disaggregation cannot carry over. Each H200 node is one COMPLETE aggregated
+# TP8/FP8 replica (prefill+decode in-engine) behind the KV-aware router.
+# GLM-5.1 FP8 ≈ 754 GB on 8×141 = 1128 GB HBM/node → ~250-300 GB KV at 0.9 util.
+# Survivability: lose a node → the other replica keeps serving at 50%.
 
 namespace: glm-serving
 maxModelLen: 202752         # ~202K context
 mtu: 9000
 
-# Staged weights (Phase 0). Both quantizations live on local NVMe, mounted read-only.
+# Staged weights (Phase 0). FP8 only — no Blackwell nodes, so NVFP4 is not staged.
 modelPaths:
-  fp8: /models/glm-5.1-fp8        # prefill (H200)
-  nvfp4: /models/glm-5.1-nvfp4    # decode (Blackwell)
+  fp8: /models/glm-5.1-fp8
 modelsHostPath: /var/lib/models   # node path staged by the model-staging chart
 
-# Rails consumed by every worker pod (full-node pattern).
+# Rails consumed by every worker pod (full-node pattern). NOTE: aggregated
+# single-node replicas carry NO inter-node serving traffic (TP8 rides NVLink;
+# there is no disagg NIXL path) — rails stay attached for fleet parity and for
+# any future multi-node/disagg work. Set rails: [] to detach.
+# NADs/policies are user-provided (sriov-rails chart intentionally not used here).
 rails: [rail0, rail1, rail2, rail3, rail4, rail5, rail6, rail7]
 
 # Collective/transfer env (§3.4). gidIndex + trafficClass MUST match node-foundation
-# (host QoS) and sriov-rails, or NCCL/UCX silently ride the lossy queue. §10
+# (host QoS) and the user-provided rail config, or NCCL/UCX silently ride the lossy
+# queue if inter-node traffic ever exists. §10
 fabric:
   gidIndex: 3
   trafficClass: 106
@@ -36,10 +44,9 @@ priorityClasses:
   interactive: serving-critical
   batch: serving-batch
 
-# Per-SKU node labels. b300 is a SEPARATE decode release — never mix B200/B300 in one EP group. §6.2
+# Single SKU in this environment — both nodes are H200.
 sku:
-  prefill: h200
-  decode: b200
+  worker: h200
 
 # Dynamo platform (operator + etcd + NATS). Pin etcd/NATS to infra nodes (chart values),
 # never GPU nodes. Off by default — mirror the chart / git clone into ./charts for disconnected.
@@ -47,7 +54,7 @@ upstream:
   install: false
 
 frontend:
-  replicas: 4                 # CPU pods on infra nodes; OpenAI-compatible API + tokenizer + router
+  replicas: 2                 # CPU pods on infra nodes; OpenAI-compatible API + tokenizer + router
   routerMode: kv              # KV/prefix-aware routing — THE inference router. §7: do not add a 2nd one
   infraNodeLabel: node-role.kubernetes.io/infra
   port: 8000
@@ -55,40 +62,35 @@ frontend:
     cpu: "16"
     memory: 64Gi
 
-prefill:
-  replicas: 4                 # 4 x (1 node TP8) to start; planner adjusts
-  nodeCount: 1
+# The aggregated worker: one full node per replica, TP8 on NVLink, FP8 end-to-end.
+worker:
+  replicas: 2                 # one per H200 node — the whole environment
+  nodeCount: 1                # single-node gang; the fabric carries no TP/EP
   tensorParallel: 8
   kvCacheDtype: fp8
-  connector: kvbm             # KVBM anchored on prefill (decode keeps CUDA graphs). §6.3
+  speculativeTokens: 1        # one MTP head — interactive lane only. §6.4
+  # KVBM OFF by default in the aggregated shape: KVBM currently disables CUDA
+  # graphs, and here the DECODE hot loop runs in the same engine as prefill —
+  # main could afford KVBM because it lived on prefill-only workers. Enable only
+  # if session park/resume is worth trading decode ITL for; then keep the tier
+  # ordering GPU-KV <= cpuCacheGb <= diskCacheGb, pod memory >= CPU tier, and
+  # diskPvc.size >= diskCacheGb (§10), and re-check `numastat` at Gate 6.
   kvbm:
-    cpuCacheGb: 1024          # pinned DRAM tier. ORDERING: GPU-KV <= cpuCacheGb <= diskCacheGb. §10
-    diskCacheGb: 2048         # on the LVMS kvcache PVC
-    initTimeoutSecs: 1200     # pinning ~1TB takes minutes
+    enabled: false
+    cpuCacheGb: 256
+    diskCacheGb: 512
+    initTimeoutSecs: 600
+    diskPvc:
+      storageClass: kvcache   # from lvms-storage
+      size: 600Gi
   resources:
     gpu: 8
     cpu: "96"                 # integer -> Guaranteed QoS -> exclusive pcpus
-    memory: 1800Gi            # >= cpuCacheGb + runtime + tokenizer headroom
-  diskPvc:
-    storageClass: kvcache     # from lvms-storage
-    size: 2200Gi              # >= diskCacheGb
-
-decode:
-  replicas: 2                 # 2 EP16 groups = 4 Blackwell nodes
-  nodeCount: 2                # Grove gang: 2 nodes/replica — KAI schedules atomically. §5
-  tensorParallel: 1
-  dataParallel: 16            # DP attention; EP = DP x TP = 16
-  kvCacheDtype: fp8
-  speculativeTokens: 1        # one MTP head — interactive lane only. §6.4
-  resources:
-    gpu: 8
-    cpu: "96"
     memory: 1200Gi
 
-# Batch lane = a second, smaller DGD: queue serving-batch, preemptible, MTP off, aggressive batch.
+# Batch lane = a second, smaller DGD: queue serving-batch, preemptible, MTP off.
 # Same model + same weights LV; only scheduling identity and engine tuning differ. §6.4
 batchLane:
   enabled: true
   frontendReplicas: 1
-  prefillReplicas: 1
-  decodeReplicas: 1
+  workerReplicas: 1
