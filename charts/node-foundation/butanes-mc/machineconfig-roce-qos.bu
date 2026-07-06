@@ -1,0 +1,62 @@
+variant: openshift
+version: 4.11.0
+metadata:
+  name: 99-gpu-hpc-roce-qos
+  labels:
+    machineconfiguration.openshift.io/role: gpu-hpc
+systemd:
+  units:
+    - name: roce-qos.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=RoCE rail QoS (trust dscp, PFC lossless, CNP marking)
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/bin/roce-qos.sh
+        RemainAfterExit=yes
+
+        [Install]
+        WantedBy=multi-user.target
+storage:
+  files:
+    - path: /usr/local/bin/roce-qos.sh
+      mode: 0755
+      overwrite: true
+      contents:
+        inline: |
+          #!/usr/bin/env bash
+          # RoCE rail host-side QoS — Phase 1.4. Pins trust mode, lossless priority, CNP marking
+          # identically on every rail PF. Must mirror the switch fabric (PFC prio, ECN/WRED, CNP queue).
+          # Templated by Helm: values come from node-foundation/values.yaml roceQos.* (§10 invariants).
+          set -euo pipefail
+
+          PFC_PRIO=3
+          TRAFFIC_CLASS=106   # DSCP 26 + ECN
+          CNP_DSCP=48
+          CNP_PRIO=6
+          MTU=9000
+
+          # Build the 8-element PFC vector with the lossless bit set at PFC_PRIO (e.g. prio 3 -> 0,0,0,1,0,0,0,0)
+          pfc=""
+          for i in 0 1 2 3 4 5 6 7; do
+            if [ "$i" -eq "$PFC_PRIO" ]; then pfc+="1,"; else pfc+="0,"; fi
+          done
+          pfc=${pfc%,}
+
+          for dev in $(ls /sys/class/infiniband/ | grep mlx5); do
+            port=$(ls /sys/class/infiniband/$dev/device/net/ | head -1)
+            mlnx_qos -i "$port" --trust dscp
+            mlnx_qos -i "$port" --pfc "$pfc"
+            echo "$TRAFFIC_CLASS" > /sys/class/infiniband/$dev/tc/1/traffic_class
+            cma_roce_tos -d "$dev" -t "$TRAFFIC_CLASS"
+            echo "$CNP_DSCP" > /sys/class/net/$port/ecn/roce_np/cnp_dscp       # CNP marking
+            echo "$CNP_PRIO" > /sys/class/net/$port/ecn/roce_np/cnp_802p_prio  # CNP egress priority
+            echo 1 > /sys/class/net/$port/ecn/roce_np/enable/$PFC_PRIO         # DCQCN NP/RP on the lossless prio
+            echo 1 > /sys/class/net/$port/ecn/roce_rp/enable/$PFC_PRIO
+            ethtool -A "$port" rx off tx off || true   # global pause off — PFC only ("not modified" exits nonzero)
+            ip link set "$port" mtu "$MTU"
+          done
