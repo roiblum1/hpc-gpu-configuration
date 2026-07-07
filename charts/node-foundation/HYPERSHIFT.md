@@ -32,7 +32,7 @@ selector is scoped instead by *which NodePool references the ConfigMap*.
 | `Tuned gpu-hpc-extras` | Second `spec.tuningConfig` ConfigMap (multiple Tuneds are allowed). The `include=openshift-node-performance-gpu-hpc` chain works the same — the hosted NTO still generates the parent profile from the PerformanceProfile. |
 | CRI-O memlock MachineConfig | Butane-render the same `.bu` source ([butanes-mc/](butanes-mc/)) to a MachineConfig, wrap in a ConfigMap (key `config`), reference in `spec.config`. |
 | RoCE QoS MachineConfig | Same as memlock. (On IB environments this is disabled anyway — see the env branch's values.) |
-| KubeletConfig | **Still not needed.** The hosted NTO generates it from the PerformanceProfile for that NodePool — same answer as standalone: hand-writing one would duplicate/conflict with the generated cpuManager/memoryManager/topologyManager settings. |
+| KubeletConfig | **Still not needed.** The hosted NTO generates it from the PerformanceProfile for that NodePool — same answer as standalone: hand-writing one would duplicate/conflict with the generated cpuManager/memoryManager/topologyManager settings. Note the PP API has **no** `spec.kubeletConfig` field — cpuManager comes from `spec.cpu`, topologyManager from `spec.numa.topologyPolicy`; the escape hatch for fields the PP can't express is the `kubeletconfig.experimental` annotation on the PP, not a second KubeletConfig. |
 
 ## Illustrative manifests (management cluster, hosted cluster's namespace)
 
