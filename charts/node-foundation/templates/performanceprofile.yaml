@@ -5,12 +5,12 @@ metadata:
   name: {{ .Values.performanceProfile.name }}
 spec:
   cpu:
+    # -> kubelet cpuManagerPolicy static (full-pcpus-only) + reservedSystemCPUs
     reserved: "{{ .Values.performanceProfile.cpu.reserved }}"
     isolated: "{{ .Values.performanceProfile.cpu.isolated }}"
   numa:
+    # -> kubelet topologyManagerPolicy — the only kubelet-manager knob this API exposes
     topologyPolicy: "{{ .Values.performanceProfile.numa.topologyPolicy }}"
-  # NTO should set MemoryManager Static — verify the generated KubeletConfig at Gate 1
-  memory: {}
   hugepages:
     defaultHugepagesSize: "{{ .Values.performanceProfile.hugepages.defaultSize }}"
     pages:
@@ -18,9 +18,14 @@ spec:
       - size: "{{ .size }}"
         count: {{ .count }}
       {{- end }}
-  # NTO derives kubelet config: cpuManagerPolicy static (full-pcpus-only),
-  # memoryManagerPolicy Static, topologyManager per .numa
-  kubeletConfig: {}
+  # There is NO spec.kubeletConfig / spec.memory in this API — do not add them.
+  # NTO generates the whole KubeletConfig (named performance-<profile-name>) from the
+  # fields above: cpuManagerPolicy static + full-pcpus-only + reservedSystemCPUs from
+  # .cpu, topologyManagerPolicy from .numa, memoryManagerPolicy Static + reservedMemory.
+  # Verify the generated object at Gate 1 (verify-nodes.sh check 4 reads it on-node).
+  # Kubelet fields the profile can't express (evictionHard, maxPods, ...): the
+  # `kubeletconfig.experimental` JSON annotation on this CR — never a second
+  # KubeletConfig CR on the same pool.
   net:
     userLevelNetworking: false
   additionalKernelArgs:
