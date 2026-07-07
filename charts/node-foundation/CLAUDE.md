@@ -3,6 +3,7 @@
 Scoped guidance for **this chart only**. Repo-root [CLAUDE.md](../../CLAUDE.md) and
 [glm51-openshift-deployment.md](../../glm51-openshift-deployment.md) §1 / §10 stay authoritative.
 **BIOS + NIC firmware (out-of-band half of this layer) live in [BIOS.md](BIOS.md).**
+**Running on HyperShift/HCP instead of standalone? Delivery mapping in [HYPERSHIFT.md](HYPERSHIFT.md).**
 
 ## Scope — what this chart owns (and does not)
 
@@ -89,6 +90,9 @@ IB fabric, `roceQos` disabled) · hugepages small · memlock unlimited · Runtim
 `performance-gpu-hpc` (NTO derives it from the profile name; `minimax-dynamo` hard-references it).
 
 ## Gate 1 (do not proceed past failure)
+Node-side checks are automated: `SSH_KEY=... USER_SSH=... PREFIX=<node-prefix>
+scripts/verify-nodes.sh` (its expected-value variables mirror `values.yaml` — keep in sync).
+Full gate:
 `/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows
 the child profile · `ibstat` shows all 8 compute rails **Active** (a `Polling` rail = dead gang
 member later) · generated KubeletConfig shows `memoryManagerPolicy: Static` (verify, don't
