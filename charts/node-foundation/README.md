@@ -52,6 +52,8 @@ Automate the node-side half with [scripts/verify-nodes.sh](scripts/verify-nodes.
 SSH_KEY=~/.ssh/id_rsa USER_SSH=core PREFIX=h100 ./scripts/verify-nodes.sh
 ```
 
+On a new SKU (or when the lscpu/cpuset checks fail), run `./scripts/verify-nodes.sh generate` first — it reads each node's real topology and prints the `reserved`/`isolated` cpusets (8 cores/socket, SMT-sibling-complete) plus the script variables to paste. Failures on cmdline/sysctl/CRI-O checks mean the layer isn't applied at all (on HyperShift see [HYPERSHIFT.md](HYPERSHIFT.md)), not that the values are wrong.
+
 Full gate: `/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows the child profile · `ibstat` shows all 8 compute rails **Active** (not `Polling`) · generated KubeletConfig shows `memoryManagerPolicy: Static` · `/proc/interrupts` shows rail-NIC IRQs on local-socket reserved cores · container `ulimit -l` → unlimited · (after Phase 2) `nvidia-smi topo -m` PIX per GPU↔NIC pair.
 
 ## See also

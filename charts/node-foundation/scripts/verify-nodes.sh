@@ -5,19 +5,28 @@
 # (performance RuntimeClass drop-in, memlock, live container cpusets via crictl).
 #
 # Usage:
-#   SSH_KEY=~/.ssh/id_rsa USER_SSH=core PREFIX=h200 ./verify-nodes.sh
+#   SSH_KEY=~/.ssh/id_rsa USER_SSH=core PREFIX=h200 ./verify-nodes.sh            # verify
+#   SSH_KEY=~/.ssh/id_rsa USER_SSH=core PREFIX=h200 ./verify-nodes.sh generate   # derive values
 # or edit the three variables below and run it plain. USER_SSH must have
-# passwordless sudo (NOPASSWD) — everything remote runs under `sudo -n`.
+# passwordless sudo (NOPASSWD) — verify mode runs everything remote under `sudo -n`.
 #
-# Exits non-zero if any check FAILs on any node. INFO lines are evidence for the
-# eyeball checks (full lscpu, cpuset spot-checks), not pass/fail.
+# verify   — check the nodes against the expected values below; exits non-zero on
+#            any FAIL. INFO lines are evidence for eyeball checks, not pass/fail.
+# generate — don't judge, derive: read each node's real topology (lscpu) and print
+#            the performanceProfile.cpu reserved/isolated cpusets (first
+#            RESERVE_CORES_PER_SOCKET cores per socket, SMT-sibling-complete) plus
+#            the expected-value vars to paste below. Run this first on a new SKU;
+#            no sudo needed.
 
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_rsa}"
 USER_SSH="${USER_SSH:-core}"
 PREFIX="${PREFIX:-}"
+MODE="${1:-verify}"
 
 # ---- Expected values — mirror charts/node-foundation/values.yaml. One place to ----
-# ---- tweak per environment; keep in sync with the §10 rows.                    ----
+# ---- tweak per environment; keep in sync with the §10 rows. `generate` mode    ----
+# ---- prints the right values for your actual nodes — paste them here.          ----
+RESERVE_CORES_PER_SOCKET=8       # the §1.2 policy: 8 housekeeping cores on EVERY socket
 RESERVED_CPUS="0-7,56-63"        # performanceProfile.cpu.reserved
 ISOLATED_CPUS="8-55,64-111"      # performanceProfile.cpu.isolated
 EXPECTED_CPUS="112"              # logical CPUs with SMT off (2x56-core)
@@ -30,6 +39,10 @@ KERNEL_ARGS="iommu=pt intel_iommu=on numa_balancing=disable skew_tick=1 tsc=reli
 
 set -u -o pipefail
 
+case "$MODE" in
+    verify|generate) ;;
+    *) echo "usage: [SSH_KEY=..] [USER_SSH=..] PREFIX=<node-prefix> $0 [verify|generate]" >&2; exit 2;;
+esac
 if [ -z "$PREFIX" ]; then
     echo "ERROR: PREFIX is empty — set PREFIX=<node-name-prefix> (e.g. PREFIX=h200)" >&2
     exit 2
@@ -48,6 +61,80 @@ fi
 
 SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
           -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR)
+
+# ---- generate mode: read real topology, print the values to use ---------------
+# stdin: one CPU id per line -> compressed range string ("0-7,56-63")
+compress_ranges() {
+    sort -n | awk 'NR==1  {s=p=$1; next}
+                   $1==p+1 {p=$1; next}
+                   {out=out sep (s==p ? s : s"-"p); sep=","; s=p=$1}
+                   END {if (NR) {out=out sep (s==p ? s : s"-"p); print out}}'
+}
+
+if [ "$MODE" = "generate" ]; then
+    REF_KEY=""; MIXED=0; GEN_ERRS=0
+    while read -r NODE IP; do
+        echo
+        echo "########## $NODE ($IP) ##########"
+        TOPO=$(ssh "${SSH_OPTS[@]}" "$USER_SSH@$IP" \
+               'lscpu -p=CPU,CORE,SOCKET && echo ---SUMMARY--- && lscpu' </dev/null 2>&1)
+        if [ $? -ne 0 ] || ! echo "$TOPO" | grep -q -- '---SUMMARY---'; then
+            echo "  ERROR: ssh failed on $NODE:"; echo "$TOPO" | sed 's/^/    /'
+            GEN_ERRS=$((GEN_ERRS+1)); continue
+        fi
+        PARSE=$(echo "$TOPO" | sed '/^---SUMMARY---/,$d' | grep -v '^#' | sort -t, -k1,1n)
+        SUM=$(echo "$TOPO" | sed -n '/^---SUMMARY---/,$p')
+        lsval() { echo "$SUM" | awk -F: -v k="$1" 'index($0,k)==1 {gsub(/^[ \t]+/,"",$2); print $2; exit}'; }
+        CPUS=$(lsval "CPU(s)"); THREADS=$(lsval "Thread(s) per core")
+        SOCKETS=$(lsval "Socket(s)"); CORES=$(lsval "Core(s) per socket")
+        NUMAS=$(lsval "NUMA node(s)")
+        # rank cores per socket by lowest CPU id; reserve the first N, siblings included
+        RES_CPUS=$(echo "$PARSE" | awk -F, -v R="$RESERVE_CORES_PER_SOCKET" \
+            '{k=$3":"$2; if (!(k in r)) {c[$3]++; r[k]=c[$3]} if (r[k]<=R) print $1}' | compress_ranges)
+        ISO_CPUS=$(echo "$PARSE" | awk -F, -v R="$RESERVE_CORES_PER_SOCKET" \
+            '{k=$3":"$2; if (!(k in r)) {c[$3]++; r[k]=c[$3]} if (r[k]>R)  print $1}' | compress_ranges)
+        RES_COUNT=$((SOCKETS * RESERVE_CORES_PER_SOCKET * THREADS))
+        ISO_COUNT=$((CPUS - RES_COUNT))
+        echo "  topology: $SOCKETS socket(s) x $CORES cores, $THREADS thread(s)/core -> $CPUS logical CPUs, $NUMAS NUMA node(s)"
+        if [ "$THREADS" != "1" ]; then
+            echo "  WARNING: SMT is ON — BIOS.md (§1.5) says disable it. The cpusets below are"
+            echo "           sibling-pair-complete so full-pcpus-only still admits GPU pods."
+        fi
+        if [ "$NUMAS" != "$SOCKETS" ]; then
+            echo "  WARNING: NUMA nodes ($NUMAS) != sockets ($SOCKETS) — SNC/NPS likely on; BIOS.md says SNC off / NPS=1."
+        fi
+        cat <<GEN
+
+  # charts/node-foundation/values.yaml -> performanceProfile.cpu ($RESERVE_CORES_PER_SOCKET cores/socket reserved)
+  reserved: "$RES_CPUS"
+  isolated: "$ISO_CPUS"
+
+  # verify-nodes.sh expected-value vars (paste at the top of this script)
+  RESERVED_CPUS="$RES_CPUS"
+  ISOLATED_CPUS="$ISO_CPUS"
+  EXPECTED_CPUS="$CPUS"
+
+  # full-node pod sizing: $ISO_COUNT isolated CPUs -> integer cpu request for the 8-GPU worker.
+  # hugepages stay 16x1G regardless — that's policy (KVBM uses pinned memory), not hardware.
+GEN
+        KEY="$RES_CPUS|$ISO_CPUS|$CPUS"
+        if [ -z "$REF_KEY" ]; then REF_KEY="$KEY"; elif [ "$KEY" != "$REF_KEY" ]; then MIXED=1; fi
+    done <<<"$NODES"
+
+    echo
+    echo "================= generate summary (PREFIX=$PREFIX) ================="
+    if [ "$GEN_ERRS" -gt 0 ]; then
+        echo "$GEN_ERRS node(s) unreachable — fix SSH first."; exit 1
+    elif [ "$MIXED" -eq 1 ]; then
+        echo "Nodes under this prefix have DIFFERENT topologies — do not share one values.yaml:"
+        echo "one MachineConfigPool/NodePool + one node-foundation release per SKU."; exit 1
+    else
+        echo "All nodes identical — paste the block above into values.yaml and into this script's vars."
+        echo "If verify mode also failed cmdline/sysctl/CRI-O checks, the node-foundation layer isn't"
+        echo "applied to these nodes yet (on HyperShift, delivery goes via NodePool — see HYPERSHIFT.md)."
+        exit 0
+    fi
+fi
 
 # ---- Remote check block. Runs under `sudo -n bash -s` on each node.            ----
 # ---- Args: reserved isolated hugepages runtime-class tuned-profile kargs cpus  ----
@@ -223,5 +310,12 @@ if [ "$TOTAL_FAILS" -eq 0 ] && [ "$UNREACHABLE" -eq 0 ]; then
     exit 0
 else
     echo "Gate 1 node-side: $TOTAL_FAILS check(s) failed, $UNREACHABLE node(s) unreachable. Do not proceed past a failed gate."
+    echo "Reading the failures: 'got X, expected Y' compares the node against this script's"
+    echo "expected-value vars (which mirror values.yaml). Two distinct causes:"
+    echo "  - lscpu/reserved-cpu mismatches -> wrong values for this hardware; run"
+    echo "      PREFIX=$PREFIX $0 generate"
+    echo "    to derive the right cpusets from the nodes' real topology."
+    echo "  - cmdline/sysctl/kubelet/CRI-O misses -> the node-foundation layer isn't applied"
+    echo "    to these nodes at all (on HyperShift it must go via NodePool — see HYPERSHIFT.md)."
     exit 1
 fi
