@@ -48,8 +48,14 @@ helm template node-foundation    # inspect PerformanceProfile, Tuned, and the em
 
 ## Gate 1 (do not proceed past failure)
 
-`/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows the child profile · `mlnx_qos` shows trust=dscp + PFC prio 3 · `cnp_dscp` = 48 on every rail · generated KubeletConfig shows `memoryManagerPolicy: Static` · `/proc/interrupts` shows rail-NIC IRQs on local-socket reserved cores · container `ulimit -l` → unlimited · (after Phase 2) `nvidia-smi topo -m` PIX per GPU↔NIC pair.
+Automate the node-side half with [scripts/verify-nodes.sh](scripts/verify-nodes.sh) — SSHes into every matching node and checks lscpu/SMT, cmdline, hugepages, the generated kubelet config, the tuned sysctls, and the CRI-O drop-ins (RuntimeClass + memlock):
+
+```bash
+SSH_KEY=~/.ssh/id_rsa USER_SSH=core PREFIX=h200 ./scripts/verify-nodes.sh
+```
+
+Full gate: `/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows the child profile · `mlnx_qos` shows trust=dscp + PFC prio 3 · `cnp_dscp` = 48 on every rail · generated KubeletConfig shows `memoryManagerPolicy: Static` · `/proc/interrupts` shows rail-NIC IRQs on local-socket reserved cores · container `ulimit -l` → unlimited · (after Phase 2) `nvidia-smi topo -m` PIX per GPU↔NIC pair.
 
 ## See also
 
-[CLAUDE.md](CLAUDE.md) — why-each-decision guidance · [BIOS.md](BIOS.md) — the out-of-band BIOS + `mlxconfig` firmware half of this layer.
+[CLAUDE.md](CLAUDE.md) — why-each-decision guidance · [BIOS.md](BIOS.md) — the out-of-band BIOS + `mlxconfig` firmware half of this layer · [HYPERSHIFT.md](HYPERSHIFT.md) — delivering this layer via `NodePool` on Hosted Control Planes.
