@@ -88,6 +88,8 @@ from the profile name; `glm51-dynamo` hard-references it).
 ## Gate 1 (do not proceed past failure)
 Node-side checks are automated: `SSH_KEY=... USER_SSH=... PREFIX=<node-prefix>
 scripts/verify-nodes.sh` (its expected-value variables mirror `values.yaml` — keep in sync).
+`verify-nodes.sh generate` derives the reserved/isolated cpusets from the nodes' real
+topology (8-cores-per-socket rule, SMT-sibling-complete) — run it to seed a new SKU's values.
 Full gate:
 `/proc/cmdline` shows all args · hugepages + allocatable CPU correct · `tuned-adm active` shows
 the child profile · `mlnx_qos` shows trust=dscp + PFC prio 3 · `cnp_dscp` = 48 on every rail ·
