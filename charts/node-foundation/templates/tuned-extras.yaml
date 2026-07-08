@@ -20,6 +20,9 @@ spec:
         net.ipv4.tcp_wmem=4096 65536 268435456
         fs.aio-max-nr=1048576
         vm.min_free_kbytes=4194304
+        net.ipv4.conf.all.arp_ignore=1
+        net.ipv4.conf.all.arp_announce=2
+        net.ipv4.conf.all.arp_filter=1
         [vm]
         transparent_hugepages=madvise
   recommend:
