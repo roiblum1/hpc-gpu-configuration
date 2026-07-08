@@ -60,4 +60,4 @@ Full gate: `/proc/cmdline` shows all args · hugepages + allocatable CPU correct
 
 ## See also
 
-[CLAUDE.md](CLAUDE.md) — why-each-decision guidance · [BIOS.md](BIOS.md) — the out-of-band BIOS + `mlxconfig` firmware half of this layer · [HYPERSHIFT.md](HYPERSHIFT.md) — delivering this layer via `NodePool` on Hosted Control Planes.
+[PARAMETERS.md](PARAMETERS.md) — deep dive on every parameter (what/default/why/failure mode) · [CLAUDE.md](CLAUDE.md) — why-each-decision guidance · [BIOS.md](BIOS.md) — the out-of-band BIOS + `mlxconfig` firmware half of this layer · [HYPERSHIFT.md](HYPERSHIFT.md) — delivering this layer via `NodePool` on Hosted Control Planes.

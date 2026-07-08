@@ -225,6 +225,9 @@ check_sysctl net.ipv4.tcp_rmem      "4096 87380 268435456"
 check_sysctl net.ipv4.tcp_wmem      "4096 65536 268435456"
 check_sysctl fs.aio-max-nr          "1048576"
 check_sysctl vm.min_free_kbytes     "4194304"
+check_sysctl net.ipv4.conf.all.arp_ignore   "1"
+check_sysctl net.ipv4.conf.all.arp_announce "2"
+check_sysctl net.ipv4.conf.all.arp_filter   "1"
 THP=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null)
 case "$THP" in
     *"[madvise]"*) pass "transparent_hugepage: $THP";;

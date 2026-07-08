@@ -179,6 +179,9 @@ spec:
         net.ipv4.tcp_wmem=4096 65536 268435456
         fs.aio-max-nr=1048576
         vm.min_free_kbytes=4194304
+        net.ipv4.conf.all.arp_ignore=1
+        net.ipv4.conf.all.arp_announce=2
+        net.ipv4.conf.all.arp_filter=1
         [vm]
         transparent_hugepages=madvise
   recommend:
@@ -189,6 +192,8 @@ spec:
 ```
 
 **`vm.min_free_kbytes=4194304` (4 GiB)** — with ~1 TB of CUDA-pinned memory per prefill node plus 9000-MTU ring buffers, the default free-page reserve is too small: atomic allocations (NIC rings, driver) start failing under reclaim pressure. 2–4 GiB is the standard reserve for RDMA-heavy hosts of this size.
+
+**ARP-flux suppression (`arp_ignore=1` / `arp_announce=2` / `arp_filter=1`)** — Linux's default weak-host model answers ARP for *any* local IP on *any* interface, so a multi-homed host's NICs advertise each other's addresses. On this rail plan (one /24 per rail over /31 point-to-point links) cross-rail flux mostly can't happen at L3, but the trio is standard multi-homed RDMA hardening (DGX OS ships `arp_filter=1`) and it keeps a rail from ever answering or sourcing ARP for a sibling rail's address. Setting the `conf.all.*` keys covers current and future host interfaces (the kernel takes the max of `all` and per-interface). **Scope caveat:** sysctls are per network namespace — this covers the *host* netns only. Rail VFs live inside pod netns; if your rail NADs put multiple rails in one subnet, set the same trio pod-side via the `tuning` CNI meta-plugin in the NAD (rails are user-provided).
 
 **Memlock for RDMA pods** — CRI-O's default memlock limit breaks ibverbs registration inside containers. Drop a CRI-O config via MachineConfig on the `gpu-hpc` pool:
 
