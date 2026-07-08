@@ -4,6 +4,7 @@ Scoped guidance for **this chart only**. Repo-root [CLAUDE.md](../../CLAUDE.md) 
 [glm51-openshift-deployment.md](../../glm51-openshift-deployment.md) §1 / §10 stay authoritative.
 **BIOS + NIC firmware (out-of-band half of this layer) live in [BIOS.md](BIOS.md).**
 **Running on HyperShift/HCP instead of standalone? Delivery mapping in [HYPERSHIFT.md](HYPERSHIFT.md).**
+**Per-parameter deep dive (what/default/why/failure mode for every knob): [PARAMETERS.md](PARAMETERS.md).**
 
 ## Scope — what this chart owns (and does not)
 
@@ -60,7 +61,10 @@ derived from the PerformanceProfile name; rename one, rename both). Adds what th
 NUMA-local reclaim stalls) · `vm.max_map_count` (large model mmaps) · net.core/tcp buffers
 (control-plane + staging paths only — RDMA bypasses TCP) · `fs.aio-max-nr` (NVMe async I/O) ·
 `vm.min_free_kbytes=4194304` (with ~1 TB pinned + 9000-MTU rings, atomic allocations fail under
-reclaim pressure without a big free-page reserve) · THP `madvise` (opt-in only).
+reclaim pressure without a big free-page reserve) · ARP-flux trio `arp_ignore=1` /
+`arp_announce=2` / `arp_filter=1` (multi-homed hardening: each NIC answers/sources ARP only
+for its own address — host netns only; if user-provided rail NADs share a subnet, set the same
+trio pod-side via the `tuning` CNI meta-plugin) · THP `madvise` (opt-in only).
 
 ### CRI-O memlock MachineConfig
 `default_ulimits = ["memlock=-1:-1"]`. ibverbs memory registration inside containers dies at
