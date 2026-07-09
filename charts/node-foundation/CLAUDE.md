@@ -38,16 +38,20 @@ every other chart keys on.
 - **Hugepages 16×1G — small on purpose.** KVBM's host tier is CUDA *pinned* memory, not
   hugetlbfs. Reserving "the size of the DRAM tier" in hugepages steals the RAM the tier needs.
   Grow only if something measurably consumes hugetlbfs.
-- **Kernel args** (each enforces one latency/DMA property): `iommu=pt` (full IOMMU translation
-  taxes GDR) · `intel_iommu=on` (SR-IOV needs the IOMMU; use `amd_iommu=on` on EPYC) ·
-  `numa_balancing=disable` (auto-NUMA migration fights static pinning) · `skew_tick=1`
-  (de-synchronize per-CPU ticks) · `tsc=reliable` (skip clocksource watchdog) ·
-  `nowatchdog`+`nosoftlockup` (no watchdog IPIs on isolated cores) · `pcie_aspm=off` (ASPM exit
-  latency spikes GDR/NVMe) · `rcu_nocb_poll` (poll offloaded RCU instead of IPI-ing isolated
-  cores) · `intel_idle.max_cstate=1`+`processor.max_cstate=1` (kernel-side enforcement of the
-  BIOS C-state policy — drop if idle power outweighs ITL jitter).
-  **Never add** `isolcpus`/`nohz_full`/`rcu_nocbs`/hugepages args by hand — NTO generates them
-  from the cpusets; duplicates drift silently.
+- **`workloadHints` pinned `{realTime: true, highPowerConsumption: false,
+  perPodPowerManagement: false}`** — these ARE the NTO defaults, pinned because the pruned
+  arg list below depends on `realTime: true` making NTO generate the low-latency args.
+- **Kernel args — only what NTO does not generate:** `numa_balancing=disable` (auto-NUMA
+  migration fights static pinning) · `pcie_aspm=off` (ASPM exit latency spikes GDR/NVMe) ·
+  `rcu_nocb_poll` (poll offloaded RCU instead of IPI-ing isolated cores) ·
+  `intel_idle.max_cstate=1`+`processor.max_cstate=1` (boot-time C-state cap; BIOS policy and
+  tuned's `force_latency` are the other two layers — drop if idle power outweighs ITL jitter).
+  **Never add what NTO already generates** (audited against the 4.20 templates —
+  PARAMETERS.md §4.2): from cpusets `isolcpus`/`nohz=on`/`nohz_full`/`rcu_nocbs`/
+  `tuned.non_isolcpus`/`systemd.cpu_affinity`/hugepages · from the realTime hint
+  `nosoftlockup`/`skew_tick=1`/`rcutree.kthread_prio=11` · from the CPU-vendor include
+  `tsc=reliable`/`nmi_watchdog=0`/`mce=off`/`intel_iommu=on iommu=pt`/`intel_pstate` —
+  duplicates drift silently.
 - **`globallyDisableIrqLoadBalancing: false`.** The per-pod half lives in `glm51-dynamo`:
   `runtimeClassName: performance-gpu-hpc` + `irq-load-balancing.crio.io`/`cpu-quota.crio.io`
   disable annotations (§3.3 low-latency contract). `true` would pin *all* IRQs to reserved cores

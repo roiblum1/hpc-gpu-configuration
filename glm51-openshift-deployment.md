@@ -117,24 +117,22 @@ spec:
     isolated: "8-55,64-111"
   numa:
     topologyPolicy: "best-effort"      # see decision note below
-  memory: {}                            # NTO should set MemoryManager Static — verify generated KubeletConfig at Gate 1
   hugepages:
     defaultHugepagesSize: "1G"
     pages:
       - size: "1G"
         count: 16                       # SMALL on purpose — see refinement note below
-  kubeletConfig: {}                     # NTO sets cpuManagerPolicy: static (full-pcpus-only),
-                                        # memoryManagerPolicy: Static, topologyManager per .numa
+  # No spec.memory / spec.kubeletConfig — those fields do not exist in this API. NTO
+  # generates the KubeletConfig (cpuManagerPolicy: static + full-pcpus-only,
+  # memoryManagerPolicy: Static, topologyManager per .numa) — verify it at Gate 1.
   net:
     userLevelNetworking: false
-  additionalKernelArgs:
-    - "iommu=pt"                        # passthrough — full IOMMU translation taxes GPUDirect RDMA
-    - "intel_iommu=on"                  # amd_iommu=on for EPYC Blackwell chassis
-    - "numa_balancing=disable"          # kernel auto-NUMA migration fights static pinning
-    - "skew_tick=1"
-    - "tsc=reliable"
-    - "nowatchdog"
-    - "nosoftlockup"
+  workloadHints:                        # pinned explicitly — these ARE the NTO defaults, but the
+    realTime: true                      # pruned arg list below depends on realTime=true generating
+    highPowerConsumption: false         # the low-latency args (see "What NOT to put" below)
+    perPodPowerManagement: false
+  additionalKernelArgs:                 # ONLY what NTO does not generate
+    - "numa_balancing=disable"          # kernel auto-NUMA page migration fights static pinning
     - "pcie_aspm=off"                   # no PCIe link power states — ASPM exit latency spikes GDR/NVMe
     - "rcu_nocb_poll"                   # poll offloaded RCU callbacks instead of IPI-ing isolated cores
     - "intel_idle.max_cstate=1"         # enforce the 1.5 C-state latency policy from the kernel side
@@ -151,7 +149,7 @@ spec:
 1. **`topologyPolicy: best-effort`, not `single-numa-node`.** The pod granularity in this design is **full-node** (one worker pod = 8 GPUs + 8 rail VFs), because TP8/EP workers span both sockets by definition. `single-numa-node` (and `restricted`) would reject these pods at admission. Intra-pod NUMA correctness is delegated downward: the kubelet still gives the pod exclusive full physical cores via static CPU manager, and the serving runtime (vLLM/TRT-LLM) plus UCX/NIXL pin threads and buffers per-GPU/per-NIC NUMA-locally. The SR-IOV pools in Phase 3 remain NUMA-scoped so the runtime *can* pick rail-local devices.
 2. **Hugepages: small, not "size of the DRAM KV tier".** Refining my earlier suggestion: KVBM's host tier allocates **CUDA pinned (page-locked) memory**, not hugetlbfs — pre-reserving 1.5 TB of 1G hugepages would *steal* RAM from the very tier you're building. Reserve only what explicit hugetlbfs consumers need (DPDK-style tooling, some UCX configs); 16×1G is a safe starting allowance. Grow only if something measurably consumes them.
 
-**What NOT to put in `additionalKernelArgs`:** NTO generates `isolcpus=managed_irq,…`, `nohz_full`, `rcu_nocbs`, `systemd.cpu_affinity` and the hugepages args from the cpusets above — adding them by hand creates duplicate args with drifting values, a classic silent-failure source. The two C-state args enforce the 1.5 BIOS latency policy from the kernel side so BIOS drift can't reintroduce deep C-states; if idle power matters more than tail latency on your fleet, remove them and use the per-pod `cpu-c-states.crio.io` annotation (3.3) instead.
+**What NOT to put in `additionalKernelArgs`:** NTO's generated profile already carries three groups of args — adding any of them by hand creates duplicate args with drifting values, a classic silent-failure source. From the **cpusets**: `isolcpus=managed_irq,…`, `nohz=on`, `rcu_nocbs`, `tuned.non_isolcpus`, `systemd.cpu_affinity`, and the hugepages args. From the **`realTime: true` workload hint**: `nohz_full`, `nosoftlockup`, `skew_tick=1`, `rcutree.kthread_prio=11`. From the **CPU-vendor include** (with the realTime hint): `tsc=reliable`, `nmi_watchdog=0`, `mce=off`, plus `intel_iommu=on iommu=pt` and `intel_pstate=<recommended>` on Intel (`iommu=pt`, `amd_pstate=guided` on EPYC). Earlier revisions of this document listed several of those explicitly — they were removed as duplicates after auditing the 4.20 NTO templates. The two C-state args remain ours: with `highPowerConsumption: false` NTO does not cap C-states at boot (tuned's `force_latency=cstate.id:1|3` caps them at runtime — the kernel args make the cap boot-time and tuned-crash-proof, and BIOS 1.5 is the third layer). If idle power matters more than tail latency on your fleet, remove them and use the per-pod `cpu-c-states.crio.io` annotation (3.3) instead.
 
 ### 1.3 Sysctls and RDMA limits the profile does not cover
 
