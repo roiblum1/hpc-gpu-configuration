@@ -35,7 +35,7 @@ helm template node-foundation    # inspect PerformanceProfile, Tuned, and the em
 | `performanceProfile.cpu.reserved` | `0-7,56-63` | 8 cores/socket on **both** sockets — NUMA-local housekeeping + NIC IRQ steering. Assumes SMT off. §10 |
 | `performanceProfile.numa.topologyPolicy` | `best-effort` | **Not** `single-numa-node` — full-node pods span both sockets and would be rejected otherwise |
 | `performanceProfile.hugepages` | 16×1G | Small on purpose — KVBM uses CUDA pinned memory, not hugetlbfs |
-| `performanceProfile.additionalKernelArgs` | see values | IOMMU passthrough, NUMA-balancing off, C-state/ASPM/RCU latency args. **Never** hand-add isolcpus/nohz_full — NTO generates them |
+| `performanceProfile.additionalKernelArgs` | see values | Only args NTO doesn't generate: NUMA-balancing off, ASPM off, RCU poll, C-state caps. IOMMU/tsc/watchdog/skew_tick come from NTO (realTime hint + vendor include) — see [PARAMETERS.md](PARAMETERS.md) §4 |
 | `performanceProfile.globallyDisableIrqLoadBalancing` | `false` | Per-pod IRQ exclusion instead (the `minimax-dynamo` RuntimeClass contract). §10 |
 | `crioMemlock.enabled` | `true` | memlock unlimited for ibverbs (this covers the LWS manifest's `IPC_LOCK`). §10 |
 | `roceQos.enabled` | **`false`** | IB fabric — no host DSCP/PFC/ECN/CNP; the remaining `roceQos.*` values are the dormant RoCE reference |

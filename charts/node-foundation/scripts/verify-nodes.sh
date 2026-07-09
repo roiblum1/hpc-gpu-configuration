@@ -33,9 +33,12 @@ EXPECTED_CPUS="112"              # logical CPUs with SMT off (2x56-core)
 HUGEPAGES_1G="16"                # performanceProfile.hugepages 1G page count
 RUNTIME_CLASS="performance-gpu-hpc"  # NTO derives it from performanceProfile.name
 TUNED_PROFILE="gpu-hpc-extras"       # tuned.name (child profile)
-# performanceProfile.additionalKernelArgs — NTO-generated args (isolcpus/nohz_full/
-# systemd.cpu_affinity/hugepages) are checked separately against the cpusets above.
-KERNEL_ARGS="iommu=pt intel_iommu=on numa_balancing=disable skew_tick=1 tsc=reliable nowatchdog nosoftlockup pcie_aspm=off rcu_nocb_poll intel_idle.max_cstate=1 processor.max_cstate=1"
+# Expected on /proc/cmdline, from BOTH sources: our additionalKernelArgs (values.yaml)
+# AND what NTO generates via the realTime workload hint + Intel vendor include
+# (tsc=reliable nmi_watchdog=0 mce=off nosoftlockup skew_tick rcutree.kthread_prio
+# intel_iommu/iommu — drop intel_iommu=on on EPYC). isolcpus/nohz_full/
+# systemd.cpu_affinity/hugepages are checked separately against the cpusets above.
+KERNEL_ARGS="numa_balancing=disable pcie_aspm=off rcu_nocb_poll intel_idle.max_cstate=1 processor.max_cstate=1 iommu=pt intel_iommu=on tsc=reliable nmi_watchdog=0 mce=off nosoftlockup skew_tick=1 rcutree.kthread_prio=11 nohz=on"
 
 set -u -o pipefail
 
@@ -188,6 +191,7 @@ if echo "$CMDLINE" | grep -q 'systemd.cpu_affinity='; then
     pass "systemd.cpu_affinity present (NTO-generated)"
 else fail "systemd.cpu_affinity missing"; fi
 info "hugepage args: $(echo "$CMDLINE" | grep -o '[a-z_]*hugepages[a-z=0-9G]*' | tr '\n' ' ')"
+info "pstate driver: $(echo "$CMDLINE" | grep -o '[a-z]*_pstate=[^ ]*' || echo 'none on cmdline')"
 
 echo "== 3. hugepages (1G)"
 NR=$(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || echo MISSING)
