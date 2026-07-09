@@ -4,7 +4,9 @@ Scoped guidance for **this chart only**. Repo-root [CLAUDE.md](../../CLAUDE.md) 
 [glm51-openshift-deployment.md](../../glm51-openshift-deployment.md) §1 / §10 stay authoritative.
 **BIOS + NIC firmware (out-of-band half of this layer) live in [BIOS.md](BIOS.md).**
 **Running on HyperShift/HCP instead of standalone? Delivery mapping in [HYPERSHIFT.md](HYPERSHIFT.md).**
-**Per-parameter deep dive (what/default/why/failure mode for every knob): [PARAMETERS.md](PARAMETERS.md).**
+**Per-parameter deep dive (what/default/why/failure mode for every knob): [PARAMETERS.md](PARAMETERS.md);
+beginner-friendly table version: [Node Performance and Tuning Configurations.md](Node%20Performance%20and%20Tuning%20Configurations.md)
+(user-maintained — keep its tables in sync when a parameter changes).**
 
 ## Scope — what this chart owns (and does not)
 
