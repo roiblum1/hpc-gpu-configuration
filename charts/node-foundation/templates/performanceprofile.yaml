@@ -28,6 +28,10 @@ spec:
   # KubeletConfig CR on the same pool.
   net:
     userLevelNetworking: false
+  workloadHints:
+    realTime: {{ .Values.performanceProfile.workloadHints.realTime }}
+    highPowerConsumption: {{ .Values.performanceProfile.workloadHints.highPowerConsumption }}
+    perPodPowerManagement: {{ .Values.performanceProfile.workloadHints.perPodPowerManagement }}
   additionalKernelArgs:
     {{- range .Values.performanceProfile.additionalKernelArgs }}
     - "{{ . }}"

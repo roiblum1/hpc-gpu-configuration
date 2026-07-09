@@ -136,28 +136,140 @@ there is no `spec.kubeletConfig`, and adding your own KubeletConfig would confli
 - **Why `false`:** RDMA is kernel-bypass but not DPDK — the rails need their full queue
   spread. Leave the NIC queue layout alone.
 
+### `workloadHints` = `{realTime: true, highPowerConsumption: false, perPodPowerManagement: false}`
+
+- **What:** selectors for which tuning bundles NTO's generated profile activates. Pinned
+  explicitly in `values.yaml` even though these *are* the NTO defaults — because §4.2's
+  pruned kernel-arg list depends on `realTime: true` being in effect.
+- **`realTime: true`** → NTO generates `nohz_full`, `nosoftlockup`, `skew_tick=1`,
+  `rcutree.kthread_prio=11`, and (via the CPU-vendor include) `tsc=reliable nmi_watchdog=0
+  mce=off`; plus RT-leaning sysctls and the `stalld` starvation daemon. This is where most
+  of the "classic low-latency args" actually come from.
+- **`highPowerConsumption: false`** → NTO does *not* add `idle=poll` or its own C-state cap;
+  we cap C-states with our two kernel args instead (reversible per fleet, §4.1).
+- **`perPodPowerManagement: false`** → tuned pins `governor=performance`,
+  `energy_perf_bias=performance`, `min_perf_pct=100` and `force_latency=cstate.id:1|3` —
+  the *runtime* half of the C-state cap (see §4.1).
+- **If wrong:** flipping `realTime` to `false` silently drops seven latency args from the
+  next render — nothing errors, the node just gets slower and jittery.
+- **Check:** verify-nodes.sh check 2 (the generated args appear on `/proc/cmdline`).
+
 ---
 
 ## 4. Kernel boot arguments
 
-`additionalKernelArgs`, verbatim from `values.yaml`. Each buys one latency or DMA property.
-NTO adds `isolcpus`/`nohz_full`/`rcu_nocbs`/`systemd.cpu_affinity`/hugepages args from §3 —
-**never write those by hand** (two owners of one arg = silent drift; the §1.2 rule).
+### Why "PerformanceProfile parameters" show up inside a Tuned object (the machinery)
 
-| Arg | Default without it | Why we set it |
-|---|---|---|
-| `iommu=pt` | full IOMMU translation for host DMA | Passthrough mode: the IOMMU stays available for SR-IOV/VFIO, but host-driver DMA (GPUDirect RDMA, NVMe) skips per-mapping IOTLB translation — full translation measurably taxes GDR bandwidth and adds latency spikes on IOTLB misses. |
-| `intel_iommu=on` | VT-d off (on many platforms) | SR-IOV VFs require the IOMMU. Without it, no rail VFs at all. **EPYC chassis: use `amd_iommu=on` instead** (per-SKU values override). |
-| `numa_balancing=disable` | auto-NUMA on (RHEL default) | Auto-NUMA samples and *migrates* pages toward the CPU touching them. Our placement is already static (pinned CPUs, pinned per-GPU memory); the sampler only adds page faults and migration jitter — and it fights CUDA pinned memory. |
-| `skew_tick=1` | all CPUs tick simultaneously | De-synchronizes the per-CPU scheduler tick. With 100+ cores, simultaneous ticks create a periodic all-core cache/latency pulse visible in inter-token latency. |
-| `tsc=reliable` | kernel cross-checks TSC against HPET | Declares the TSC trustworthy: no clocksource watchdog, no risk of a mid-run fallback to slow HPET timers. Correct on modern Xeon/EPYC with invariant TSC. |
-| `nowatchdog` | NMI hard-lockup watchdog on | The watchdog fires periodic NMIs on every core, including isolated ones. Latency noise for a debugging feature we don't want in production serving. |
-| `nosoftlockup` | soft-lockup detector on | Same rationale, softer mechanism: no detector kthread activity/IPIs on isolated cores. |
-| `pcie_aspm=off` | firmware/OS may enable link power states | ASPM lets PCIe links doze; the *exit* latency (µs → ms) lands directly on GPUDirect RDMA and NVMe completions as spikes. GPU nodes never idle enough to profit. |
-| `rcu_nocb_poll` | offloaded RCU kthreads are IPI-woken | Pairs with the NTO-generated `rcu_nocbs`: the `rcuo` kthreads *poll* for callbacks instead of being woken by IPIs from isolated cores — removes the last regular IPI source on the hot cores. |
-| `intel_idle.max_cstate=1` + `processor.max_cstate=1` | deep C-states allowed | Caps idle at C1: cores never pay deep-sleep wakeup latency (tens of µs) in the middle of a decode step. Kernel-side enforcement of the BIOS C-state policy ([BIOS.md](BIOS.md) §1.5) — belt and suspenders. **Trade-off:** higher idle power; drop both args if idle thermals matter more than tail latency. |
+NTO never writes kernel args directly. It **compiles the PerformanceProfile into a
+generated Tuned profile** — `openshift-node-performance-gpu-hpc`, visible with
+`oc get tuned -n openshift-cluster-node-tuning-operator` — whose `[bootloader]` section
+carries the cmdline, and whose `[sysctl]`/`[cpu]`/`[service]` sections carry the runtime
+tuning. TuneD's bootloader plugin hands the args to MCO, which reboots the pool. So when
+you inspect the cluster and find cpusets and kernel args "under a Tuned", that is the
+**compiled artifact of the PerformanceProfile, not duplication** — and it is exactly why
+our own `gpu-hpc-extras` child profile (§5) does `include=openshift-node-performance-gpu-hpc`:
+it layers on top of the compiled output. The generated profile itself includes
+`openshift-node,cpu-partitioning` plus a CPU-vendor include (`…-intel-x86` / `…-amd-x86`).
 
-- **Check:** verify-nodes.sh check 2 asserts every one of these strings in `/proc/cmdline`.
+The full expected `/proc/cmdline` is therefore **our five args (§4.1) + NTO's generated
+args (§4.2)**. verify-nodes.sh check 2 asserts both groups.
+
+### 4.1 Args this chart sets (`additionalKernelArgs` — only what NTO does not generate)
+
+#### `numa_balancing=disable`
+
+- **Default:** auto-NUMA balancing on (RHEL default).
+- **Why:** auto-NUMA samples memory access and *migrates* pages toward the CPU touching
+  them. Our placement is already static (pinned CPUs, per-GPU/per-NIC NUMA-local buffers);
+  the sampler only adds page faults and migration jitter, and it fights CUDA pinned memory.
+- **If missing:** periodic latency spikes under memory pressure; `numa_pages_migrated`
+  climbing in `/proc/vmstat`.
+
+#### `pcie_aspm=off`
+
+- **Default:** firmware/OS may enable PCIe Active State Power Management.
+- **Why:** ASPM lets PCIe links doze; the *exit* latency (µs → ms) lands directly on
+  GPUDirect RDMA and NVMe completions as spikes. GPU nodes never idle enough to profit.
+- **If missing:** intermittent GDR/NVMe completion spikes that profile as "random".
+
+#### `rcu_nocb_poll`
+
+- **Default:** offloaded-RCU kthreads are woken by IPIs from the CPUs they serve.
+- **Why:** pairs with the NTO-generated `rcu_nocbs=<isolated>` (§4.2): the `rcuo` kthreads
+  *poll* for callbacks instead of being IPI-woken by isolated cores — removes the last
+  regular IPI source on the hot cores. Poll cost lands on reserved cores, where it belongs.
+- **If missing:** low-rate IPI noise on isolated cores; visible as rare ITL outliers.
+
+#### `intel_idle.max_cstate=1` + `processor.max_cstate=1`
+
+- **Default:** with `highPowerConsumption: false`, NTO does **not** cap C-states at boot —
+  deep C-states stay allowed as far as the kernel is concerned.
+- **Why:** caps idle at C1 so cores never pay deep-sleep wakeup latency (tens of µs)
+  mid-decode-step. This is the **boot-time layer of a three-layer cap**: BIOS C-state policy
+  ([BIOS.md](BIOS.md)) → these args (survive tuned crashes/restarts) → tuned's
+  `force_latency=cstate.id:1|3` + `governor=performance` (runtime, from
+  `perPodPowerManagement: false`). On EPYC, `intel_idle.max_cstate` is inert and
+  `processor.max_cstate` carries the cap.
+- **Trade-off:** higher idle power. If idle thermals outweigh tail latency, drop both args
+  and use the per-pod `cpu-c-states.crio.io` annotation instead — that's a supported,
+  documented alternative, which is why these two stay in *our* list rather than a hint.
+
+### 4.2 Args NTO generates — expected on the node, **never** re-add them by hand
+
+Two owners of one arg = silent drift when the cpusets change (the §1.2 rule). This chart's
+earlier revisions listed six of these in `additionalKernelArgs`; they were removed after
+auditing the 4.20 NTO templates.
+
+**From the cpusets (always generated):**
+
+- **`isolcpus=managed_irq,<isolated>`** — kernel keeps *managed* device IRQs off the isolated
+  CPUs. Note: `managed_irq` only, not `domain` — scheduler placement stays kubelet's job
+  (static CPU manager), not the kernel's.
+- **`nohz=on` + `nohz_full=<isolated>`** *(nohz_full via the realTime hint)* — tickless
+  isolated cores: no 250 Hz scheduler tick on a core running exactly one busy thread.
+- **`rcu_nocbs=<isolated>`** — RCU callbacks are offloaded from isolated cores to `rcuo`
+  kthreads (which our `rcu_nocb_poll` then makes poll).
+- **`tuned.non_isolcpus=<mask>`** — bookkeeping mask telling tuned which CPUs are
+  housekeeping; drives its IRQ-affinity handling.
+- **`systemd.cpu_affinity=<reserved>`** — PID 1 and every service it spawns start pinned to
+  reserved cores. This is what verify-nodes.sh check 7 asserts.
+- **`default_hugepagesz=1G hugepagesz=1G hugepages=16`** — boot-time reservation from §3's
+  hugepages block.
+
+**From `realTime: true` (base template):**
+
+- **`nosoftlockup`** — no soft-lockup detector activity on isolated cores. A 100%-busy
+  polling worker looks *exactly* like a soft lockup to the detector; without this you get
+  false-positive stack dumps that themselves cause jitter.
+- **`skew_tick=1`** — de-synchronizes per-CPU ticks; with 100+ cores, simultaneous ticks
+  are a periodic all-core latency pulse.
+- **`rcutree.kthread_prio=11`** — runs RCU kthreads at RT priority 11 so grace periods
+  can't be starved by busy workloads.
+
+**From the CPU-vendor include (`realTime: true`, Intel/AMD):**
+
+- **`tsc=reliable`** — declares the TSC trustworthy, disabling the clocksource watchdog
+  that periodically cross-checks it. Two effects: no watchdog overhead, and no risk of a
+  false-positive mid-run demotion to HPET (catastrophically slow timekeeping). Safe on any
+  modern Xeon/EPYC with invariant TSC (`constant_tsc nonstop_tsc` in `/proc/cpuinfo`).
+  **Is it necessary?** Not strictly — recent kernels auto-qualify well-behaved Intel TSCs —
+  but NTO ships it with the realTime hint, so *it's not ours to decide*: it arrives
+  generated. We used to list it explicitly; removed as a duplicate.
+- **`nmi_watchdog=0`** — hard-lockup (NMI) watchdog off: no periodic NMIs on any core.
+  (This is why our old `nowatchdog` arg was redundant: `nmi_watchdog=0` + `nosoftlockup`
+  together cover both detectors.)
+- **`mce=off`** — disables machine-check *polling* (the periodic corrected-error scans),
+  another periodic all-core interference source. Uncorrected fatal MCEs still trap.
+- **`intel_iommu=on iommu=pt`** (Intel) / **`iommu=pt`** (AMD) — IOMMU on for SR-IOV VFs,
+  but *passthrough* for host-driver DMA: GPUDirect RDMA and NVMe skip per-mapping IOTLB
+  translation, which measurably taxes GDR bandwidth. Generated by the vendor include —
+  another pair we used to set by hand.
+- **`intel_pstate=<recommended>`** (Intel; generation-dependent `active`/`disable`) /
+  **`amd_pstate=guided`** (AMD) — P-state driver mode; paired with tuned's
+  `governor=performance`. verify-nodes.sh reports the actual value as INFO.
+
+- **Check (both groups):** verify-nodes.sh check 2 asserts every expected string in
+  `/proc/cmdline`; the cpuset-bearing args are compared against the expected cpusets.
 
 ---
 
@@ -167,10 +279,17 @@ Delivered by the `gpu-hpc-extras` Tuned profile, which `include=`s the NTO-gener
 and layers what the PerformanceProfile API can't express. Priority 19 (lower number wins)
 so it takes over *while inheriting everything*.
 
-### `vm.swappiness=0` (default 60)
+Inherited unchanged from the generated profile (listed so you know where they come from):
+`net.ipv4.tcp_fastopen=3`, `vm.dirty_ratio=10`, `vm.dirty_background_ratio=3`, and — from
+the realTime hint — `kernel.hung_task_timeout_secs=600`, `kernel.nmi_watchdog=0`,
+`kernel.sched_rt_runtime_us=-1`, `vm.stat_interval=10`. Our child profile only **adds or
+overrides** the entries below.
+
+### `vm.swappiness=0` (RHEL default 60; the generated profile already lowers it to 10 — we override to 0)
 
 Never swap under memory pressure if there is any file cache left to reclaim. With ~1 TB of
 CUDA-pinned memory, swapping anything the inference stack touches means multi-ms stalls.
+`10` still permits swap as a last resort; `0` says "only when the alternative is OOM".
 (Pinned pages themselves can't swap — this protects everything around them.)
 
 ### `vm.zone_reclaim_mode=0` (default 0 — pinned explicitly)
@@ -235,12 +354,14 @@ this size. Don't set it dramatically higher: the reserve is permanently unusable
   Y, hard-to-reproduce RDMA connection resets.
 - **Check:** verify-nodes.sh check 5.
 
-### `transparent_hugepages=madvise` (default `always` on RHEL 9)
+### `transparent_hugepages=madvise` (RHEL default `always`; the generated profile sets `never` — we override to `madvise`)
 
 `always` lets khugepaged rewrite any process's memory into 2M pages in the background —
-compaction stalls at unpredictable times. `never` throws away real wins for allocators that
-ask for THP explicitly. `madvise` = only where the application opted in. Middle ground, on
-purpose.
+compaction stalls at unpredictable times, which is why NTO's generated profile goes all the
+way to `never`. But `never` throws away real wins for allocators that *ask* for THP
+explicitly (`madvise(MADV_HUGEPAGE)` — CUDA/PyTorch allocators do). `madvise` = huge pages
+only where the application opted in: khugepaged works only on opted-in regions. A
+deliberate, documented override of the generated value — middle ground, on purpose.
 
 ---
 
