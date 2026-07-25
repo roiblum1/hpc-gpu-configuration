@@ -1,0 +1,12 @@
+apiVersion: v2
+name: rdma-rails
+description: >-
+  Phase 3 — RDMA rail networking via NMState (replaces the SR-IOV rails chart). Kubernetes
+  NMState Operator (OLM) plus one NodeNetworkConfigurationPolicy per rail NIC. mode=infiniband
+  brings the IB HCAs up (no IP; NCCL uses IB verbs); mode=roce sets per-node IP + one route per
+  NIC. Pods consume the NICs directly via hostNetwork + NCCL_IB_HCA — no VFs, no NADs. The OFED
+  driver (NVIDIA Network Operator) and host RoCE QoS (node-foundation) are separate concerns.
+type: application
+version: 0.1.0
+appVersion: "4.20"
+keywords: [openshift, nmstate, roce, infiniband, rdma, rail, hostnetwork]
