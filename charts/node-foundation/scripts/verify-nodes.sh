@@ -203,7 +203,7 @@ done
 echo "== 4. kubelet config (NTO-generated from the PerformanceProfile — no manual KubeletConfig)"
 KCONF=/etc/kubernetes/kubelet.conf
 if [ -r "$KCONF" ]; then
-    grab() { grep -o "\"$1\": *\"[^\"]*\"" "$KCONF" | head -1 | sed 's/.*: *"\(.*\)"/\1/'; }
+    grab() { awk -F: -v k="$1" '$1 ~ "^[ \t]*\"?"k"\"?$" {gsub(/^[ \t]*"?|"? *$/, "", $2); print $2; exit}' "$KCONF"; }
     check_eq "cpuManagerPolicy"      "$(grab cpuManagerPolicy)"      "static"
     check_eq "memoryManagerPolicy"   "$(grab memoryManagerPolicy)"   "Static"
     check_eq "topologyManagerPolicy" "$(grab topologyManagerPolicy)" "best-effort"
