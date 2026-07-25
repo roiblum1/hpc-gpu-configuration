@@ -1,0 +1,90 @@
+# Phase 3 — RDMA rails via NMState. Source: §3 / §10. Replaces the SR-IOV rails chart.
+#
+# The model: GPU worker pods run hostNetwork=true (whole-GPU, no MIG), so a pod sees every host NIC
+# and its RDMA device directly — NCCL_IB_HCA selects the NICs for the pod's GPUs. There are NO VFs
+# and NO NADs to create. This chart's ONLY job is host NIC config via NodeNetworkConfigurationPolicy:
+#   infiniband  -> bring the IB HCAs up (type/mtu, no IP; NCCL uses IB verbs)
+#   roce        -> per-node ethernet IP + one route per NIC (deterministic NIC selection, no ECMP)
+#
+# NOT owned here: the OFED driver (NVIDIA Network Operator — keep it), host RoCE QoS/PFC/CNP
+# (node-foundation/roce-qos.sh), and the pod hostNetwork/env contract (glm51-dynamo).
+
+mode: roce                    # infiniband | roce — this is the RoCEv2 (H200) environment
+roleLabel: gpu-hpc            # §10 — node selector; must match node-foundation MCP role label
+
+operator:
+  enabled: true
+  namespace: openshift-nmstate
+  operatorGroup: true
+  # Kubernetes NMState Operator (OLM). The `NMState` instance CR it manages ships in this chart
+  # (operator.yaml) and deploys the nmstate-handler DaemonSet that reconciles the NNCPs below.
+  subscription:
+    name: kubernetes-nmstate-operator
+    channel: stable
+    source: redhat-operators       # -> your mirrored CatalogSource (Phase 0)
+    sourceNamespace: openshift-marketplace
+    installPlanApproval: Automatic
+
+# ============================================================================================
+# InfiniBand mode  ->  one NodeNetworkConfigurationPolicy per NIC, cluster-wide (role label).
+# No IP: NCCL runs over native IB verbs and NCCL_IB_HCA (set in glm51-dynamo) picks the HCAs.
+# nicList is identical on every (identical) node, so one policy per NIC covers all rail nodes.
+# ============================================================================================
+infiniband:
+  mtu: 4092                   # §10 — IB/IPoIB MTU; set to your fabric's value (link MTU differs from ETH)
+  ibMode: datagram            # datagram | connected
+  # IB partition key. null = unpartitioned fabric (default partition) -> the base HCA is configured
+  # directly. When set, the chart creates the IPoIB CHILD interface <nic>.<pkey> on each HCA (kernel
+  # naming, e.g. ibp24s0.8001), puts mtu/mode on the child, and brings the base HCA up plain.
+  # QUOTE it ("0x8001") — unquoted 0x8001 is parsed by YAML as the integer 32769. The chart
+  # normalizes an int back to hex defensively, but quoting is clearer.
+  # Must match the partition your fabric's subnet manager assigns these ports. §10
+  pkey: null                  # e.g. "0x8001"
+  # Entries may be a plain NIC name (inherits infiniband.pkey) or a mapping to override per NIC:
+  #   - ibp24s0
+  #   - {name: ibp64s0, pkey: "0x8002"}
+  nicList:
+    - ibp24s0
+    - ibp64s0
+    # - ibp79s0
+    # - ibp94s0
+    # - ibp154s0
+    # - ibp192s0
+    # - ibp206s0
+    # - ibp220s0
+
+# ============================================================================================
+# RoCE mode  ->  one NodeNetworkConfigurationPolicy per (node, NIC), nodeSelector by hostname.
+# Each node's rail NIC has a UNIQUE host IP, so config is per-node (a cluster-wide policy cannot
+# hold a different IP per node). Per NIC: ip + gateway (next-hop) + dst route(s). Exactly one
+# route per NIC keeps the host routing table unambiguous -> deterministic NIC, NCCL_CROSS_NIC=0
+# holds (the ECMP-avoidance rule from the old ROUTING.md, now enforced host-side). §10
+# Addresses are ILLUSTRATIVE — set them from your fabric plan.
+# ============================================================================================
+roce:
+  mtu: 9000                   # §10 — must match host NIC, switch (leaf >=9216), and pods
+  nodes:
+    - name: worker-0          # kubernetes.io/hostname
+      nics:
+        - name: ens1f0np0
+          ip: 192.168.111.1/24
+          gateway: 192.168.111.254        # next-hop for this rail's route(s)
+          routes:
+            - 192.168.121.0/24            # dst prefix reached via gateway (this rail's remote block)
+        - name: ens2f0np0
+          ip: 192.168.121.1/24
+          gateway: 192.168.121.254
+          routes:
+            - 192.168.111.0/24
+    - name: worker-1
+      nics:
+        - name: ens1f0np0
+          ip: 192.168.111.2/24
+          gateway: 192.168.111.254
+          routes:
+            - 192.168.121.0/24
+        - name: ens2f0np0
+          ip: 192.168.121.2/24
+          gateway: 192.168.121.254
+          routes:
+            - 192.168.111.0/24
