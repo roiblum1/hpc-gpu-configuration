@@ -1,0 +1,47 @@
+{{- /*
+Kubernetes NMState Operator (OLM) + the NMState instance CR it manages. Shipped in-chart per the
+repo's "self-contained operators" convention (like sriov-rails/gpu-operator/lvms-storage).
+
+Ordering: the Subscription installs the operator + CRDs (NMState, NodeNetworkConfigurationPolicy);
+the `NMState` instance CR then deploys the nmstate-handler DaemonSet that reconciles the NNCPs. On a
+cold install the CRDs must exist before the NNCPs apply — the Phase-3 gate / an idempotent
+`helm upgrade --install` re-run covers this (no OLM-await in helm; same pattern as the sibling
+operator charts). Do NOT proceed to Gate 3 until `oc get nmstate nmstate` shows the handler up.
+*/}}
+{{- if .Values.operator.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.operator.namespace }}
+  labels:
+    kubernetes.io/metadata.name: {{ .Values.operator.namespace }}
+{{- if .Values.operator.operatorGroup }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-nmstate
+  namespace: {{ .Values.operator.namespace }}
+spec:
+  targetNamespaces:
+    - {{ .Values.operator.namespace }}
+{{- end }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ .Values.operator.subscription.name }}
+  namespace: {{ .Values.operator.namespace }}
+spec:
+  channel: {{ .Values.operator.subscription.channel }}
+  name: {{ .Values.operator.subscription.name }}
+  source: {{ .Values.operator.subscription.source }}
+  sourceNamespace: {{ .Values.operator.subscription.sourceNamespace }}
+  installPlanApproval: {{ .Values.operator.subscription.installPlanApproval }}
+---
+# Cluster-scoped instance CR — triggers the operator to deploy the nmstate-handler DaemonSet.
+apiVersion: nmstate.io/v1
+kind: NMState
+metadata:
+  name: nmstate
+{{- end }}

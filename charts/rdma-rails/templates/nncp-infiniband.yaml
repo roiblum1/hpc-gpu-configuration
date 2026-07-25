@@ -1,0 +1,63 @@
+{{- /*
+InfiniBand mode: one NodeNetworkConfigurationPolicy per NIC in .Values.infiniband.nicList, applied
+cluster-wide to the rail nodes (role label). NO IP: NCCL runs over native IB verbs and
+glm51-dynamo's NCCL_IB_HCA selects the HCAs for each pod's GPUs.
+
+Partitioning (pkey): nmstate models an IB partition as an IPoIB CHILD interface carrying
+`infiniband.base-iface` + `infiniband.pkey`. So:
+  pkey unset -> one interface: the base HCA, with mtu + mode.
+  pkey set   -> two interfaces: the base HCA brought up plain, plus the child <nic>.<pkey-hex>
+                (kernel naming) carrying mtu + mode + base-iface + pkey.
+A pkey may be set chart-wide (.Values.infiniband.pkey) or overridden per NIC via the mapping form
+of a nicList entry. Schema: nmstate.io InfiniBand interface. See chart CLAUDE.md.
+*/}}
+{{- if eq .Values.mode "infiniband" }}
+{{- range $entry := .Values.infiniband.nicList }}
+{{- /* nicList entries: plain string (inherit chart pkey) or {name, pkey} mapping (override). */}}
+{{- $nic := $entry }}
+{{- $pkey := $.Values.infiniband.pkey }}
+{{- if kindIs "map" $entry }}
+{{- $nic = $entry.name }}
+{{- if hasKey $entry "pkey" }}{{- $pkey = $entry.pkey }}{{- end }}
+{{- end }}
+{{- /* Normalize pkey to quoted hex: tolerate an unquoted 0x8001 that YAML parsed as int 32769. */}}
+{{- $pkeyStr := "" }}
+{{- $pkeySuffix := "" }}
+{{- if $pkey }}
+{{- $pkeyStr = ternary (toString $pkey) (printf "0x%04x" (int $pkey)) (kindIs "string" $pkey) }}
+{{- $pkeySuffix = lower (trimPrefix "0x" $pkeyStr) }}
+{{- end }}
+---
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: rdma-ib-{{ $nic }}{{ if $pkey }}-{{ $pkeySuffix }}{{ end }}
+spec:
+  nodeSelector:
+    node-role.kubernetes.io/{{ $.Values.roleLabel }}: ""
+  desiredState:
+    interfaces:
+{{- if $pkey }}
+      # Base HCA: brought up plain; the partition child below carries the config.
+      - name: {{ $nic }}
+        type: infiniband
+        state: up
+      # IPoIB partition child — this is the rail interface on partition {{ $pkeyStr }}.
+      - name: {{ $nic }}.{{ $pkeySuffix }}
+        type: infiniband
+        state: up
+        mtu: {{ $.Values.infiniband.mtu }}
+        infiniband:
+          base-iface: {{ $nic }}
+          mode: {{ $.Values.infiniband.ibMode }}
+          pkey: "{{ $pkeyStr }}"
+{{- else }}
+      - name: {{ $nic }}
+        type: infiniband
+        state: up
+        mtu: {{ $.Values.infiniband.mtu }}
+        infiniband:
+          mode: {{ $.Values.infiniband.ibMode }}
+{{- end }}
+{{- end }}
+{{- end }}
